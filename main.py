@@ -1,26 +1,37 @@
-from flask import Flask, request, jsonify
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 import yt_dlp
 
-app = Flask(__name__)
+app = FastAPI()
 
-@app.route("/api/yt", methods=["GET"])
-def yt():
-    url = request.args.get("url")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+@app.post("/api/yt")
+async def yt_download(data: dict):
+    url = data.get("url")
     if not url:
-        return jsonify({"error": "url parameter missing"}), 400
+        return {"error": "URL yok"}
+
+    ydl_opts = {
+        "quiet": True,
+        "skip_download": True,
+    }
 
     try:
-        ydl_opts = {"quiet": True, "skip_download": True}
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
-            return jsonify(info)
+
+        return {
+            "title": info.get("title"),
+            "duration": info.get("duration"),
+            "formats": info.get("formats")
+        }
 
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route("/", methods=["GET"])
-def home():
-    return "YT API is running!"
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
+        return {"error": str(e)}
