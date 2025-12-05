@@ -1,26 +1,26 @@
-from fastapi import FastAPI
-from pydantic import BaseModel
+from flask import Flask, request, jsonify
 import yt_dlp
 
-app = FastAPI()
+app = Flask(__name__)
 
-class YtRequest(BaseModel):
-    url: str
+@app.route("/api/yt", methods=["GET"])
+def yt():
+    url = request.args.get("url")
+    if not url:
+        return jsonify({"error": "url parameter missing"}), 400
 
-@app.post("/api/yt")
-def get_audio(req: YtRequest):
+    try:
+        ydl_opts = {"quiet": True, "skip_download": True}
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            return jsonify(info)
 
-    ydl_opts = {
-        "format": "ba[ext=m4a]/bestaudio/best",
-        "quiet": True,
-        "skip_download": True,
-    }
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(req.url, download=False)
+@app.route("/", methods=["GET"])
+def home():
+    return "YT API is running!"
 
-    return {
-        "status": "ok",
-        "title": info.get("title"),
-        "audio_url": info["url"]
-    }
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=10000)
