@@ -1,7 +1,9 @@
 services:
   - type: web
     name: yt-api
-    env: python
-    region: frankfurt
-    buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn main:app --host 0.0.0.0 --port 10000
+    runtime: python
+    buildCommand: ""
+    startCommand: "python main.py"
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11
