@@ -1,4 +1,2 @@
-fastapi
-uvicorn
+Flask
 yt-dlp
-pydantic
