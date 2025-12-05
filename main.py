@@ -1,37 +1,18 @@
 from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 import yt_dlp
 
 app = FastAPI()
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+class VideoRequest(BaseModel):
+    url: str
 
 @app.post("/api/yt")
-async def yt_download(data: dict):
-    url = data.get("url")
-    if not url:
-        return {"error": "URL yok"}
-
-    ydl_opts = {
-        "quiet": True,
-        "skip_download": True,
-    }
-
+async def get_video_info(data: VideoRequest):
     try:
+        ydl_opts = {"quiet": True, "skip_download": True}
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-
-        return {
-            "title": info.get("title"),
-            "duration": info.get("duration"),
-            "formats": info.get("formats")
-        }
-
+            info = ydl.extract_info(data.url, download=False)
+            return {"title": info.get("title"), "formats": info.get("formats")}
     except Exception as e:
         return {"error": str(e)}
