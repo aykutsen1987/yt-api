@@ -1,10 +1,11 @@
 import os
 import yt_dlp
+import json
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 # --------------------------
-# 1. PYDANTIC VERI MODELLERİ
+# 1. PYDANTIC VERI MODELİ
 # --------------------------
 # FastAPI'ye POST isteğinde beklenen JSON yapısını tanımlar: {"url": "..."}
 class VideoRequest(BaseModel):
@@ -18,18 +19,14 @@ app = FastAPI()
 @app.post("/api/yt")
 async def get_video_info(data: VideoRequest):
     # Ortam Değişkeninden YOUTUBE_COOKIES değerini çeker.
-    # (Sizin Render panelinizde tanımladığınız çerez dizesi)
     youtube_cookies = os.environ.get("YOUTUBE_COOKIES", None)
     
     # yt-dlp ayarları (options)
     ydl_opts = {
-        # Çıktı vermeyi engeller, logları temiz tutar.
         "quiet": True, 
-        # Sadece bilgi çeker, video indirmeyi atlar.
         "skip_download": True, 
-        # Çözümlemeyi hızlandırmak için sadece ses formatlarını seçer.
-        "format": "bestaudio",
-        # Geçici çözüm: JS runtime uyarısını gidermek için (daha önce konuşulmuştu).
+        "format": "bestaudio/best", # En iyi ses akışını seçer
+        # JS runtime uyarısını gidermek için (kararlılık artışı)
         "extractor_args": "youtube:player_client=default", 
     }
     
@@ -42,38 +39,36 @@ async def get_video_info(data: VideoRequest):
             # Video bilgilerini çeker
             info = ydl.extract_info(data.url, download=False)
             
-            # Yt-dlp, "bestaudio" formatını seçtiğinde genellikle 'url', 'title' vb. alanlarını doldurur.
-            # En iyi akış URL'sini ve meta verileri API yanıtı olarak döndürürüz.
+            # 🔥 GÜVENLİK KONTROLÜ: info objesinin dict olup olmadığını kontrol et.
+            # 'str' object has no attribute 'get' hatasını çözer.
+            if not isinstance(info, dict):
+                 # Eğer info bir dizeyse, bunu hataya dahil et
+                raise ValueError(f"yt-dlp beklenmedik bir format döndürdü. Yanıt tipi: {type(info).__name__}")
             
-            # NOT: Eğer backend'iniz sadece tek bir URL döndürecekse, 
-            # en iyi ses formatının URL'sini doğrudan çekmelisiniz.
-            
-            # Eğer info['url'] en iyi ses URL'sini temsil ediyorsa:
+            # Oynatılacak en uygun URL'yi info objesinden güvenli bir şekilde çekiyoruz.
             stream_url = info.get('url')
             
-            # VEYA, formats listesinden en iyi ses URL'sini çekmek isterseniz:
-            # stream_url = info.get('formats')[0].get('url') # En üstteki formatı alır
-            
+            if not stream_url:
+                # URL bulunamadıysa, bir hata fırlat.
+                raise ValueError("Video için geçerli bir akış URL'si bulunamadı (Bot Engeli veya video hatası).")
+                
             # API'nin Android uygulamanızın beklediği formata göre JSON döndürür
             return {
                 "title": info.get("title", "Başlık Yok"),
                 "audio": stream_url, 
-                # Video akışına ihtiyacınız yoksa 'video' alanını silin, 
-                # ancak mobil uygulamanız bekliyorsa şimdilik boş bırakın.
-                "video": "", 
+                "video": "", # Video URL'si dahil edilmedi
                 "thumbnail": info.get("thumbnail") 
             }
             
     except Exception as e:
         # Hata oluşursa 500 hatası döndürür ve loglarda çıkan hatayı detay olarak gösterir.
-        # Bu, Android tarafında hata ayıklamayı kolaylaştırır.
         error_detail = f"Video bilgileri çekilirken hata oluştu: {e}"
+        # Redbin'e geri dönecek hatayı fırlat
         raise HTTPException(status_code=500, detail=error_detail)
 
 # --------------------------
-# 3. ROOT ENDPOINT (İsteğe Bağlı)
+# 3. ROOT ENDPOINT (Sunucu Sağlığını Kontrol Etmek İçin)
 # --------------------------
-# Sunucunun çalışıp çalışmadığını kontrol etmek için basit bir endpoint
 @app.get("/")
 def read_root():
     return {"status": "ok", "message": "YouTube Stream API is running."}
