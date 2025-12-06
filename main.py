@@ -14,10 +14,12 @@ async def get_video_info(data: VideoRequest):
     
     # yt-dlp ayarlarını oluştur
     ydl_opts = {
-        "quiet": True, 
-        "skip_download": True, 
-        # ... diğer format ayarları
-    }
+    "quiet": True, 
+    "skip_download": True, 
+    # JS runtime sorununun geçici çözümü
+    "extractor_args": "youtube:player_client=default", 
+    # ...
+}
     
     # Çerezler varsa, yt-dlp'ye ilet
     if youtube_cookies:
