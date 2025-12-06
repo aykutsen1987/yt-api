@@ -1,9 +1,15 @@
+# render.yaml
+
 services:
   - type: web
     name: yt-api
     runtime: python
-    buildCommand: ""
-    startCommand: "python main.py"
+    # Bağımlılıkları yüklemek için otomatik olarak 'pip install -r requirements.txt' çalışır.
+    buildCommand: "pip install -r requirements.txt"
+    
+    # Uygulamayı başlatmak için Uvicorn kullanın (main.py dosyasındaki 'app' objesini çalıştır)
+    startCommand: "uvicorn main:app --host 0.0.0.0 --port $PORT"
+    
     envVars:
       - key: PYTHON_VERSION
         value: 3.11
