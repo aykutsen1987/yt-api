@@ -14,5 +14,4 @@ services:
       - key: PYTHON_VERSION
         # Değeri 3.11'den 3.11.9'a güncelleyin
         value: 3.11.9 
-      - key: YOUTUBE_COOKIES
-        sync: false
+     
