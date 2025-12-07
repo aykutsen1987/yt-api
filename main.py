@@ -1,125 +1,71 @@
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+import subprocess
 import os
-import tempfile
-import logging
-import re
-from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import RedirectResponse
-from yt_dlp import YoutubeDL
-from yt_dlp.utils import DownloadError
-from pydantic import BaseModel, HttpUrl
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+app = FastAPI()
 
-app = FastAPI(
-    title="YouTube Ses API",
-    description="YouTube videolarını dinlemek veya indirmek için API.",
-    version="2.0.0",
+# CORS ayarları
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
-# -------------------------------------------------------
-# COOKIES — 10 parçayı birleştir
-# -------------------------------------------------------
-def load_cookie_from_parts():
+
+# 🔥 10 parçayı birleştirip cookies.txt dosyasını oluşturan fonksiyon
+def create_cookie_file():
+    cookie_file = "cookies.txt"
     parts = []
-    for i in range(1, 11):
-        part = os.getenv(f"YTDLP_COOKIES_{i}", "")
-        if part:
-            parts.append(part)
 
-    cookies_joined = "".join(parts)
+    for i in range(1, 11):  # 1'den 10'a kadar
+        key = f"YTDLP_COOKIES_{i}"
+        part = os.getenv(key)
 
-    if not cookies_joined.strip():
-        return None
+        if part is None:
+            print(f"[UYARI] {key} bulunamadı, boş kabul edildi.")
+            part = ""
 
+        parts.append(part)
+
+    # Birleştir ve cookies.txt oluştur
+    with open(cookie_file, "w", encoding="utf-8") as f:
+        f.write("".join(parts))
+
+    print("✔ cookies.txt oluşturuldu.")
+
+
+# 🔥 FastAPI başlarken cookie dosyasını oluştur
+create_cookie_file()
+
+
+# =============== YOUTUBE INFO ENDPOINT ================
+@app.get("/info")
+def get_video_info(url: str):
     try:
-        with tempfile.NamedTemporaryFile(mode='w+', delete=False, encoding='utf-8', suffix='.txt') as f:
-            f.write(cookies_joined)
-            return f.name
+        print(f"İstek alındı: {url}")
+
+        # yt-dlp komutu (cookies.txt kullanıyor)
+        result = subprocess.check_output([
+            "yt-dlp",
+            "--cookies", "cookies.txt",
+            "-j",   # JSON output
+            url
+        ])
+
+        return {"status": "ok", "data": result.decode("utf-8")}
+
+    except subprocess.CalledProcessError as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Video bilgileri alınamadı: {e.output.decode('utf-8')}"
+        )
     except Exception as e:
-        logger.error(f"Cookie dosyası oluşturulamadı: {e}")
-        return None
-
-
-# -------------------------------------------------------
-# Pydantic Model
-# -------------------------------------------------------
-class VideoInfo(BaseModel):
-    title: str
-    thumbnail: str
-    duration: int
-    stream_url: HttpUrl
-
-
-# -------------------------------------------------------
-# Yardımcı Fonksiyon
-# -------------------------------------------------------
-def sanitize_filename(title: str) -> str:
-    return re.sub(r'[\\/*?:"<>|]', "", title)[:100]
-
-
-def get_audio_url(video_url: str):
-    cookie_file = load_cookie_from_parts()
-
-    ydl_opts = {
-        "format": "bestaudio/best",
-        "quiet": True,
-        "no_warnings": True,
-        "cookiefile": cookie_file,
-    }
-
-    try:
-        with YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(video_url, download=False)
-
-            if not info:
-                raise DownloadError("Boş veri alındı.")
-
-            audio_formats = [
-                f for f in info.get("formats", [])
-                if f.get("acodec") != "none" and f.get("vcodec") == "none"
-            ]
-
-            if audio_formats:
-                audio_url = audio_formats[-1]["url"]
-            else:
-                audio_url = info.get("url")
-
-            if not audio_url:
-                raise DownloadError("Ses linki bulunamadı.")
-
-            return {
-                "title": info.get("title"),
-                "thumbnail": info.get("thumbnail"),
-                "duration": info.get("duration", 0),
-                "audio_url": audio_url
-            }
-
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Video bilgileri alınamadı: {e}")
-
-
-# -------------------------------------------------------
-# ENDPOINTS
-# -------------------------------------------------------
-@app.get("/info", response_model=VideoInfo)
-def info(url: HttpUrl = Query(...)):
-    data = get_audio_url(str(url))
-    return VideoInfo(
-        title=data["title"],
-        thumbnail=data["thumbnail"],
-        duration=data["duration"],
-        stream_url=data["audio_url"]
-    )
-
-
-@app.get("/download", response_class=RedirectResponse)
-def download(url: HttpUrl = Query(...)):
-    data = get_audio_url(str(url))
-    filename = sanitize_filename(data["title"]) + ".mp3"
-    return RedirectResponse(data["audio_url"])
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/")
-def root():
-    return {"message": "YouTube MP3 API çalışıyor."}
+def home():
+    return {"message": "YT API çalışıyor!"}
