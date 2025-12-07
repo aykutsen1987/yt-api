@@ -1,384 +1,205 @@
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import JSONResponse
-from fastapi.middleware.cors import CORSMiddleware
+import os
+import asyncio
+import subprocess
+from pathlib import Path
+from fastapi import FastAPI, HTTPException, Request, status
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 import yt_dlp
-import os
 import logging
-from pathlib import Path
-import traceback
+from yt_dlp.utils import DownloadError, ExtractorError
 
-# Logging ayarları
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
-
-# FastAPI uygulaması
-app = FastAPI(
-    title="YouTube MP3 API",
-    version="1.0.0",
-    description="YouTube videolarını MP3 formatına dönüştürme API'si"
-)
-
-# CORS ayarları (Android için önemli)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# Downloads klasörünü oluştur
-DOWNLOADS_DIR = Path("downloads")
-DOWNLOADS_DIR.mkdir(exist_ok=True)
-logger.info(f"Downloads klasörü oluşturuldu: {DOWNLOADS_DIR.absolute()}")
-
-# Cookies dosyası
+# --- Yapılandırma ---
 COOKIES_FILE = Path("cookies.txt")
 
-# Statik dosya servisi - downloads klasörü için
-try:
-    app.mount("/downloads", StaticFiles(directory="downloads"), name="downloads")
-    logger.info("Statik dosya servisi başlatıldı: /downloads")
-except Exception as e:
-    logger.error(f"Statik dosya servisi başlatılamadı: {e}")
+if not COOKIES_FILE.exists():
+    COOKIES_FILE.touch()
 
-# Request modelleri
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+# --- Pydantic Modelleri ---
+
 class CookieRequest(BaseModel):
     cookies: str
 
 class MP3Request(BaseModel):
     url: str
 
-# Global exception handler
-@app.exception_handler(Exception)
-async def global_exception_handler(request: Request, exc: Exception):
-    logger.error(f"Global hata: {str(exc)}\n{traceback.format_exc()}")
-    return JSONResponse(
-        status_code=500,
-        content={
-            "status": "error",
-            "message": str(exc),
-            "path": str(request.url)
+class ErrorResponse(BaseModel):
+    status: str = "error"
+    message: str
+
+# --- yt-dlp Ayarları (Streaming için değiştirildi) ---
+
+YDL_OPTS = {
+    # Akış için sadece bilgiyi çekeceğiz, indirme yapmayacağız
+    "format": "bestaudio",
+    "noplaylist": True,
+    "nocheckcertificate": True,
+    "cookies": str(COOKIES_FILE),
+    "extractor_args": {
+        "youtube": {
+            "player_client": "default"
         }
-    )
+    },
+    "quiet": True,
+    "no_warnings": True,
+}
 
-# yt-dlp ayarları
-def get_ydl_opts():
-    opts = {
-        "format": "bestaudio/best",
-        "extractaudio": True,
-        "audioformat": "mp3",
-        "outtmpl": "downloads/%(id)s.%(ext)s",
-        "noplaylist": True,
-        "nocheckcertificate": True,
-        "extractor_args": {
-            "youtube": {
-                "player_client": ["default", "web"]
-            }
-        },
-        "postprocessors": [{
-            "key": "FFmpegExtractAudio",
-            "preferredcodec": "mp3",
-            "preferredquality": "192",
-        }],
-        "quiet": False,
-        "no_warnings": False,
-    }
-    
-    # Cookie varsa ekle
-    if COOKIES_FILE.exists():
-        opts["cookies"] = str(COOKIES_FILE)
-        logger.info(f"Cookie dosyası kullanılıyor: {COOKIES_FILE}")
-    else:
-        logger.warning("Cookie dosyası bulunamadı")
-    
-    return opts
+# --- FastAPI Uygulaması ---
 
-@app.get("/")
-async def root():
-    """Ana sayfa - API bilgileri"""
-    return {
-        "status": "online",
-        "message": "YouTube MP3 API çalışıyor",
-        "version": "1.0.0",
-        "endpoints": {
-            "health": "GET /health - Sağlık kontrolü",
-            "update_cookies": "POST /update_cookies - Cookie güncelleme",
-            "mp3": "POST /mp3 - YouTube videosu indir",
-            "list": "GET /list - İndirilen dosyaları listele"
-        },
-        "example": {
-            "update_cookies": {
-                "method": "POST",
-                "url": "/update_cookies",
-                "body": {"cookies": "HSID=xxx; SID=yyy"}
-            },
-            "download": {
-                "method": "POST",
-                "url": "/mp3",
-                "body": {"url": "https://www.youtube.com/watch?v=VIDEO_ID"}
-            }
-        }
-    }
+app = FastAPI(
+    title="YouTube MP3 Streamer API",
+    description="Render üzerinde çalışan, yt-dlp tabanlı YouTube MP3 Akış API'si."
+)
 
-@app.get("/health")
-async def health_check():
-    """Sunucu sağlık kontrolü"""
-    try:
-        cookie_exists = COOKIES_FILE.exists()
-        downloads_count = len(list(DOWNLOADS_DIR.glob("*.mp3")))
-        
-        # FFmpeg kontrolü
-        ffmpeg_available = os.system("ffmpeg -version > /dev/null 2>&1") == 0
-        
-        return {
-            "status": "healthy",
-            "timestamp": str(Path.cwd()),
-            "cookies": {
-                "exists": cookie_exists,
-                "path": str(COOKIES_FILE.absolute()) if cookie_exists else None
-            },
-            "downloads": {
-                "dir": str(DOWNLOADS_DIR.absolute()),
-                "count": downloads_count
-            },
-            "ffmpeg": "available" if ffmpeg_available else "not_found"
-        }
-    except Exception as e:
-        logger.error(f"Health check hatası: {str(e)}")
-        return JSONResponse(
-            status_code=500,
-            content={
-                "status": "unhealthy",
-                "error": str(e)
-            }
-        )
+# --- Yardımcı Fonksiyonlar ---
 
-@app.post("/update_cookies")
-async def update_cookies(request: CookieRequest):
+async def run_blocking_operation(func, *args, **kwargs):
+    """Bloklayan fonksiyonları ayrı bir thread'de çalıştırır."""
+    return await asyncio.to_thread(func, *args, **kwargs)
+
+# --- Endpoint'ler ---
+
+@app.get("/health", summary="Sunucu durum kontrolü.")
+def health_check():
+    """Basit durum kontrolü (Health Check)."""
+    return {"status": "ok", "service": "YouTube MP3 Streamer"}
+
+@app.post(
+    "/update_cookies",
+    summary="YouTube çerezlerini günceller ve kaydeder.",
+    status_code=status.HTTP_200_OK
+)
+async def update_cookies(data: CookieRequest):
     """
-    Android uygulamasından gelen cookie'leri kaydet
+    Android uygulaması tarafından gönderilen çerezleri cookies.txt dosyasına kaydeder.
     """
     try:
-        cookies = request.cookies.strip()
-        
-        if not cookies:
-            raise HTTPException(status_code=400, detail="Cookie verisi boş olamaz")
-        
-        logger.info(f"Cookie güncelleme isteği alındı (uzunluk: {len(cookies)})")
-        
-        # Cookie'yi Netscape formatında kaydet
+        # Çerez dizesini direkt olarak dosyaya yazma
         with open(COOKIES_FILE, "w", encoding="utf-8") as f:
-            f.write("# Netscape HTTP Cookie File\n")
-            f.write("# Generated by YouTube MP3 API\n\n")
-            
-            # Cookie'leri parse et
-            for cookie in cookies.split(";"):
-                cookie = cookie.strip()
-                if "=" in cookie:
-                    key, value = cookie.split("=", 1)
-                    key = key.strip()
-                    value = value.strip()
-                    
-                    # Netscape format: domain, flag, path, secure, expiration, name, value
-                    f.write(f".youtube.com\tTRUE\t/\tTRUE\t0\t{key}\t{value}\n")
+            f.write(data.cookies)
         
-        logger.info(f"Cookie başarıyla kaydedildi: {COOKIES_FILE}")
-        
-        return {
-            "status": "success",
-            "message": "Cookie'ler başarıyla güncellendi",
-            "file": str(COOKIES_FILE.absolute()),
-            "cookies_count": len(cookies.split(";"))
-        }
-    
-    except HTTPException:
-        raise
+        logging.info("YouTube çerezleri güncellendi.")
+        return {"status": "ok", "message": "Çerezler başarıyla kaydedildi."}
     except Exception as e:
-        logger.error(f"Cookie kaydetme hatası: {str(e)}\n{traceback.format_exc()}")
-        raise HTTPException(status_code=500, detail=f"Cookie kaydetme hatası: {str(e)}")
-
-@app.post("/mp3")
-async def download_mp3(request: MP3Request):
-    """
-    YouTube videosunu MP3 olarak indir
-    """
-    try:
-        url = request.url.strip()
-        
-        # URL validasyonu
-        if not url:
-            raise HTTPException(status_code=400, detail="URL boş olamaz")
-        
-        if "youtube.com" not in url and "youtu.be" not in url:
-            raise HTTPException(
-                status_code=400, 
-                detail="Geçerli bir YouTube URL'si giriniz (youtube.com veya youtu.be)"
-            )
-        
-        logger.info(f"İndirme isteği: {url}")
-        
-        # yt-dlp ile video bilgilerini al
-        ydl_opts = get_ydl_opts()
-        
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            try:
-                # Video bilgilerini çek
-                logger.info("Video bilgileri çekiliyor...")
-                info = ydl.extract_info(url, download=False)
-                
-                if not info:
-                    raise HTTPException(status_code=404, detail="Video bilgileri alınamadı")
-                
-                video_id = info.get("id")
-                title = info.get("title", "Unknown")
-                duration = info.get("duration", 0)
-                
-                logger.info(f"Video: {title} ({video_id}) - {duration}s")
-                
-                # MP3 dosya yolu
-                mp3_file = DOWNLOADS_DIR / f"{video_id}.mp3"
-                
-                # Dosya zaten varsa
-                if mp3_file.exists():
-                    logger.info(f"Dosya cache'de bulundu: {mp3_file.name}")
-                    file_size = mp3_file.stat().st_size
-                    
-                    # Base URL
-                    base_url = os.getenv("RENDER_EXTERNAL_URL", "http://localhost:8000")
-                    audio_url = f"{base_url}/downloads/{video_id}.mp3"
-                    
-                    return {
-                        "status": "ok",
-                        "cached": True,
-                        "title": title,
-                        "duration": duration,
-                        "file_size": file_size,
-                        "audio_url": audio_url,
-                        "video_id": video_id
-                    }
-                
-                # Video indir
-                logger.info("Video indiriliyor...")
-                ydl.download([url])
-                
-                # İndirilen dosyayı kontrol et
-                if not mp3_file.exists():
-                    # Bazen dosya ismi farklı olabiliyor
-                    possible_files = list(DOWNLOADS_DIR.glob(f"{video_id}.*"))
-                    if possible_files:
-                        mp3_file = possible_files[0]
-                        logger.info(f"Dosya farklı uzantıyla bulundu: {mp3_file.name}")
-                    else:
-                        raise FileNotFoundError(f"MP3 dosyası oluşturulamadı: {video_id}")
-                
-                file_size = mp3_file.stat().st_size
-                logger.info(f"İndirme tamamlandı: {mp3_file.name} ({file_size} bytes)")
-                
-                # Base URL
-                base_url = os.getenv("RENDER_EXTERNAL_URL", "http://localhost:8000")
-                audio_url = f"{base_url}/downloads/{mp3_file.name}"
-                
-                return {
-                    "status": "ok",
-                    "cached": False,
-                    "title": title,
-                    "duration": duration,
-                    "file_size": file_size,
-                    "audio_url": audio_url,
-                    "video_id": video_id
-                }
-                
-            except yt_dlp.utils.DownloadError as e:
-                error_msg = str(e)
-                logger.error(f"yt-dlp hatası: {error_msg}")
-                
-                if "Sign in" in error_msg or "bot" in error_msg.lower():
-                    raise HTTPException(
-                        status_code=403,
-                        detail="YouTube bot koruması aktif. Cookie güncellemesi gerekli."
-                    )
-                elif "Video unavailable" in error_msg or "Private video" in error_msg:
-                    raise HTTPException(
-                        status_code=404,
-                        detail="Video bulunamadı, özel veya kaldırılmış olabilir"
-                    )
-                else:
-                    raise HTTPException(
-                        status_code=500,
-                        detail=f"İndirme hatası: {error_msg[:200]}"
-                    )
-    
-    except HTTPException:
-        raise
-    except FileNotFoundError as e:
-        logger.error(f"Dosya hatası: {str(e)}")
+        logging.error(f"Çerez kaydetme hatası: {e}")
         raise HTTPException(
-            status_code=500,
-            detail="MP3 dönüştürme başarısız. FFmpeg kurulu değil veya çalışmıyor."
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=ErrorResponse(message="Çerezler kaydedilirken bir hata oluştu.").dict()
+        )
+
+# Jeneratör fonksiyonu, ses çıktısını parça parça yakalar
+async def generate_audio_stream(url: str):
+    """
+    yt-dlp'yi harici bir süreç olarak çalıştırır ve ses çıktısını yakalar.
+    """
+    logging.info(f"Akış başlatılıyor: {url}")
+    
+    # yt-dlp'yi çalıştırırken çıktıyı stdout'a yönlendiriyoruz
+    # --no-progress: İlerlemeyi gösterme
+    # -o -: Çıktıyı stdout'a yönlendir
+    # --cookies: cookies.txt dosyasını kullan
+    
+    # yt-dlp komutunu oluştururken tüm ayarları dahil etmeliyiz
+    cmd = [
+        "yt-dlp", 
+        url,
+        "-f", "bestaudio", 
+        "--no-progress", 
+        "-o", "-",
+        "--cookies", str(COOKIES_FILE)
+    ]
+    
+    # Akış yanıtı için process'i başlat
+    try:
+        # asyncio.create_subprocess_exec kullanılarak non-blocking process başlatılır
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+
+        # Çıktıyı parça parça oku ve yield et
+        while True:
+            chunk = await process.stdout.read(4096)
+            if not chunk:
+                break
+            yield chunk
+
+        # İşlemin sonlanmasını bekle ve dönüş kodunu kontrol et
+        await process.wait()
+        
+        if process.returncode != 0:
+            stderr = await process.stderr.read()
+            stderr_str = stderr.decode('utf-8', errors='ignore')
+            
+            # yt-dlp hatalarını yakalamaya çalış
+            error_message = f"yt-dlp akış hatası. Hata kodu: {process.returncode}. Detay: {stderr_str.split('ERROR: ')[-1].strip()}"
+            logging.error(error_message)
+            raise DownloadError(error_message)
+
+    except DownloadError as e:
+        # Hata jeneratör içinde oluştuğunda, bu hata FastAPI'de 
+        # düzgün yakalanamaz. Bu yüzden en iyi strateji, yanıt 
+        # başlatılmadan önce bilgiyi çekmektir.
+        logging.error(f"Akış sırasında DownloadError: {e}")
+        # Burada bir HTTP yanıtı döndüremeyiz, bu yüzden process'i sonlandırıp 
+        # istemcinin bağlantıyı kesmesini bekleyeceğiz.
+
+    except Exception as e:
+        logging.error(f"Beklenmeyen akış hatası: {e}")
+        # Bağlantıyı kes
+
+@app.post(
+    "/listen",
+    summary="YouTube URL'sindeki sesi doğrudan akış olarak döndürür.",
+)
+async def stream_audio(data: MP3Request):
+    """
+    Gönderilen YouTube URL'sindeki sesi bir HTTP akışı olarak (StreamingResponse) döndürür.
+    """
+    url = data.url
+    
+    try:
+        # 1. Video Bilgilerini Çekme (Hata Kontrolü)
+        # Akış başlamadan önce URL'nin geçerli olduğunu ve çerezlerin çalıştığını kontrol etmeliyiz.
+        # Bu, akış başladıktan sonra hata vermemek için kritik.
+        ydl_info = yt_dlp.YoutubeDL(YDL_OPTS | {"skip_download": True, "force_generic_extractor": True})
+        
+        # Blocking call, must be run in a separate thread
+        info_dict = await run_blocking_operation(ydl_info.extract_info, url, download=False)
+        
+        # Eğer bir hata yoksa, devam et
+        logging.info(f"Başlık: {info_dict.get('title')}. Akış başlatılıyor.")
+        
+        # 2. Streaming Başlatma
+        
+        # Content-Type'ı ses (audio) olarak ayarlıyoruz. MP3 formatı için 'audio/mpeg' en yaygın olanıdır.
+        return StreamingResponse(
+            generate_audio_stream(url), 
+            media_type="audio/mpeg"
+        )
+
+    except (DownloadError, ExtractorError) as e:
+        # yt-dlp hatalarını (Engelleme, Çerez vb.) yakalar
+        error_message = f"YouTube indirme/işleme hatası: {str(e).split('ERROR: ')[-1].split(';')[0]}"
+        logging.error(error_message)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=ErrorResponse(message=error_message).dict()
         )
     except Exception as e:
-        logger.error(f"Beklenmeyen hata: {str(e)}\n{traceback.format_exc()}")
-        raise HTTPException(status_code=500, detail=f"Sunucu hatası: {str(e)}")
+        error_message = f"Beklenmeyen sunucu hatası: {str(e)}"
+        logging.error(error_message, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=ErrorResponse(message=error_message).dict()
+        )
 
-@app.get("/list")
-async def list_files():
-    """İndirilen MP3 dosyalarını listele"""
-    try:
-        files = []
-        for file in DOWNLOADS_DIR.glob("*.mp3"):
-            files.append({
-                "filename": file.name,
-                "size": file.stat().st_size,
-                "size_mb": round(file.stat().st_size / (1024 * 1024), 2),
-                "url": f"/downloads/{file.name}"
-            })
-        
-        return {
-            "status": "ok",
-            "count": len(files),
-            "files": sorted(files, key=lambda x: x["filename"])
-        }
-    except Exception as e:
-        logger.error(f"Liste hatası: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.delete("/clear")
-async def clear_downloads():
-    """Tüm indirilen dosyaları sil (TESTİNG için)"""
-    try:
-        deleted = 0
-        for file in DOWNLOADS_DIR.glob("*.mp3"):
-            file.unlink()
-            deleted += 1
-        
-        logger.info(f"{deleted} dosya silindi")
-        
-        return {
-            "status": "ok",
-            "message": f"{deleted} dosya silindi"
-        }
-    except Exception as e:
-        logger.error(f"Silme hatası: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-# Startup event
-@app.on_event("startup")
-async def startup_event():
-    logger.info("=" * 50)
-    logger.info("YouTube MP3 API Başlatıldı")
-    logger.info(f"Downloads klasörü: {DOWNLOADS_DIR.absolute()}")
-    logger.info(f"Cookie dosyası: {COOKIES_FILE.absolute()}")
-    logger.info(f"Cookie mevcut: {COOKIES_FILE.exists()}")
-    logger.info("=" * 50)
+# --- Uvicorn Çalıştırma Talimatı ---
 
 if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv("PORT", 8000))
-    logger.info(f"Sunucu başlatılıyor: 0.0.0.0:{port}")
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    uvicorn.run("main:app", host="0.0.0.0", port=port, log_level="info")
