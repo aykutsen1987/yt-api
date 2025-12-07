@@ -4,12 +4,19 @@ services:
   - type: web
     name: yt-api
     runtime: python
-    # Bağımlılıkları yüklemek için otomatik olarak 'pip install -r requirements.txt' çalışır.
+    plan: free # Ücretsiz planı kullanmak için ekleyebilirsiniz (isteğe bağlı)
+    
+    # Bağımlılıkları yüklemek için
     buildCommand: "pip install -r requirements.txt"
     
-    # Uygulamayı başlatmak için Uvicorn kullanın (main.py dosyasındaki 'app' objesini çalıştır)
+    # Uygulamayı başlatmak için
     startCommand: "uvicorn main:app --host 0.0.0.0 --port $PORT"
     
     envVars:
       - key: PYTHON_VERSION
-        value: 3.11
+        value: 3.11 # Python sürümünü belirtmek iyi bir pratiktir
+      - key: YOUTUBE_COOKIES
+        # Değeri doğrudan buraya YAZMAYIN.
+        # Bunun yerine Render arayüzünden ekleyeceğiz.
+        # 'fromEnvironment' kullanarak bir ortam grubundan da çekebilirsiniz.
+        sync: false # Bu anahtarın değerinin Render arayüzünden yönetileceğini belirtir.
