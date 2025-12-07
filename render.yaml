@@ -4,19 +4,15 @@ services:
   - type: web
     name: yt-api
     runtime: python
-    plan: free # Ücretsiz planı kullanmak için ekleyebilirsiniz (isteğe bağlı)
+    plan: free
     
-    # Bağımlılıkları yüklemek için
     buildCommand: "pip install -r requirements.txt"
     
-    # Uygulamayı başlatmak için
     startCommand: "uvicorn main:app --host 0.0.0.0 --port $PORT"
     
     envVars:
       - key: PYTHON_VERSION
-        value: 3.11 # Python sürümünü belirtmek iyi bir pratiktir
+        # Değeri 3.11'den 3.11.9'a güncelleyin
+        value: 3.11.9 
       - key: YOUTUBE_COOKIES
-        # Değeri doğrudan buraya YAZMAYIN.
-        # Bunun yerine Render arayüzünden ekleyeceğiz.
-        # 'fromEnvironment' kullanarak bir ortam grubundan da çekebilirsiniz.
-        sync: false # Bu anahtarın değerinin Render arayüzünden yönetileceğini belirtir.
+        sync: false
