@@ -3,6 +3,7 @@ import yt_dlp
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
+# POST isteği için veri modeli
 class VideoRequest(BaseModel):
     url: str
 
@@ -15,7 +16,8 @@ async def get_video_info(data: VideoRequest):
     ydl_opts = {
         "quiet": True, 
         "skip_download": True,
-        "format": "bestaudio/best",
+        "format": "bestaudio/best", # En iyi ses akışını seçer
+        # Kararlılık ve bot engeli için önerilen parametreler:
         "extractor_args": ["youtube:player_client=default"],
     }
     
@@ -24,26 +26,23 @@ async def get_video_info(data: VideoRequest):
         
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            # Video bilgilerini çeker
             info = ydl.extract_info(data.url, download=False)
             
-            # -----------------------------------------------------------------
-            # 🔥 GÜVENLİK KONTROLÜ VE LİSTE DÜZELTMESİ (Bu kısmı güncelleyin)
-            # -----------------------------------------------------------------
-            # 1. Eğer yt-dlp bir videolar listesi döndürdüyse (örneğin çalma listesinden)
+            # 🔥 KRİTİK DÜZELTME: Gelen verinin bir liste olup olmadığını kontrol et.
+            # Eğer bir liste ise (çalma listesi/kanal URL'si gönderilmişse), 
+            # listenin ilk öğesini al (ilk video).
             if isinstance(info, list):
                 if not info:
                     raise ValueError("Çalma listesi/kanal boş veya erişilebilir video içermiyor.")
-                # Listenin ilk elemanını (ilk videoyu) al
-                info = info[0]
+                info = info[0] # Listenin ilk video objesini alıyoruz.
             
-            # 2. Önceki STR kontrolünü koru
+            # GÜVENLİK KONTROLÜ: Gelen verinin bir sözlük (dict) olduğundan emin ol.
+            # Bu, 'str' object has no attribute 'get' hatasını çözer.
             if not isinstance(info, dict):
-                # Eğer info hâlâ bir sözlük değilse (str, None vb.) hata fırlat.
                 raise ValueError(f"yt-dlp beklenmedik bir format döndürdü. Yanıt tipi: {type(info).__name__}. Çerezler geçersiz olabilir.")
             
-            # -----------------------------------------------------------------
             # Normal Veri İşleme Devam Ediyor
-            # -----------------------------------------------------------------
             stream_url = info.get('url')
             
             if not stream_url:
@@ -60,6 +59,7 @@ async def get_video_info(data: VideoRequest):
         error_detail = f"Video bilgileri çekilirken hata oluştu: {e}"
         raise HTTPException(status_code=500, detail=error_detail)
 
+# Sunucu durum kontrolü
 @app.get("/")
 def read_root():
     return {"status": "ok", "message": "YouTube Stream API is running."}
