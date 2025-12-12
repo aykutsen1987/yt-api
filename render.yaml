@@ -10,7 +10,7 @@ services:
     region: oregon
     plan: free
     
-    # ✅ buildCommand'ı sadece Python bağımlılıkları için bırakın
+    # ✅ SADECE BU KALMALI
     buildCommand: pip install -r requirements.txt
     
     # ✅ Start Command
