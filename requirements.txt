@@ -1,5 +1,31 @@
-fastapi
-uvicorn
-pydantic
-yt-dlp
-# Not: Render'da sistem düzeyinde ffmpeg'in kurulu olması gerekebilir.
+# ============================================
+# YouTube to MP3/M4A Converter API
+# Python Dependencies
+# ============================================
+
+# ✅ Web Framework
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+pydantic==2.5.3
+
+# ✅ YouTube Downloader (güncel versiyon)
+yt-dlp==2024.3.10
+
+# ✅ HTTP Client
+httpx==0.26.0
+aiohttp==3.9.3
+
+# ✅ System Monitoring
+psutil==5.9.8
+
+# ✅ Utilities
+python-multipart==0.0.9
+python-dotenv==1.0.1
+
+# ✅ CORS Support
+fastapi-cors==0.0.6
+
+# ============================================
+# NOT: FFmpeg sistem düzeyinde kurulmalıdır
+# RENDER'da apt-buildpack ile kurulur (render.yaml)
+# ============================================
