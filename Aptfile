@@ -1,12 +1,1 @@
-# ============================================
-# RENDER Aptfile
-# Sistem düzeyinde paket kurulumu
-# ============================================
-
-# ✅ FFmpeg - Video/Audio processing
 ffmpeg
-
-# ✅ Opsiyonel: Diğer multimedia araçları
-# libavcodec-extra
-# libavformat-dev
-# libavutil-dev
