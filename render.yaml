@@ -7,15 +7,11 @@ services:
   - type: web
     name: yt-api
     env: python
-    region: oregon  # veya size en yakın region: frankfurt, singapore, ohio
-    plan: free  # free, starter, standard, pro
+    region: oregon
+    plan: free
     
-    # ✅ Build Command - FFmpeg kurulumu dahil
+    # ❌ buildCommand'dan apt-get komutunu KALDIRIN
     buildCommand: |
-      echo "🔧 Installing system dependencies..."
-      apt-get update && apt-get install -y ffmpeg
-      echo "✅ FFmpeg installed"
-      ffmpeg -version
       echo "📦 Installing Python dependencies..."
       pip install --upgrade pip
       pip install -r requirements.txt
