@@ -10,14 +10,10 @@ services:
     region: oregon
     plan: free
     
-    # ❌ buildCommand'dan apt-get komutunu KALDIRIN
-    buildCommand: |
-      echo "📦 Installing Python dependencies..."
-      pip install --upgrade pip
-      pip install -r requirements.txt
-      echo "✅ Build complete"
+    # ✅ buildCommand'ı sadece Python bağımlılıkları için bırakın
+    buildCommand: pip install -r requirements.txt
     
-    # ✅ Start Command - Uvicorn server
+    # ✅ Start Command
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT --workers 2
     
     # ✅ Environment Variables
