@@ -1,15 +1,101 @@
+# ============================================
+# RENDER Deployment Configuration
+# YouTube to MP3/M4A Converter API
+# ============================================
+
 services:
   - type: web
-    name: youtube-mp3-api
+    name: yt-api
     env: python
-    plan: free
+    region: oregon  # veya size en yakın region: frankfurt, singapore, ohio
+    plan: free  # free, starter, standard, pro
+    
+    # ✅ Build Command - FFmpeg kurulumu dahil
     buildCommand: |
+      echo "🔧 Installing system dependencies..."
+      apt-get update && apt-get install -y ffmpeg
+      echo "✅ FFmpeg installed"
+      ffmpeg -version
+      echo "📦 Installing Python dependencies..."
       pip install --upgrade pip
       pip install -r requirements.txt
-    startCommand: "uvicorn main:app --host 0.0.0.0 --port $PORT --log-level info"
+      echo "✅ Build complete"
+    
+    # ✅ Start Command - Uvicorn server
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT --workers 2
+    
+    # ✅ Environment Variables
     envVars:
       - key: PYTHON_VERSION
-        value: "3.11.0"
-      - key: RENDER_EXTERNAL_URL
-        sync: false
-    # Render otomatik olarak ffmpeg içerir (Python buildpack'te mevcut)
+        value: 3.11.0
+      
+      - key: PORT
+        value: 10000
+      
+      - key: LOG_LEVEL
+        value: info
+      
+      - key: WORKERS
+        value: 2
+      
+      # ✅ FFmpeg path (RENDER'da default)
+      - key: FFMPEG_PATH
+        value: /usr/bin/ffmpeg
+      
+      # ✅ Temp directory
+      - key: TEMP_DIR
+        value: /tmp
+    
+    # ✅ Health Check
+    healthCheckPath: /health
+    
+    # ✅ Auto Deploy (GitHub push'ta otomatik deploy)
+    autoDeploy: true
+    
+    # ✅ Branch
+    branch: main  # veya master
+    
+    # ✅ Root Directory (eğer subdirectory'deyse)
+    # rootDir: backend
+    
+    # ✅ Disk (persistent storage - opsiyonel)
+    # disk:
+    #   name: yt-api-disk
+    #   mountPath: /data
+    #   sizeGB: 1
+
+# ============================================
+# RENDER PLAN RECOMMENDATIONS
+# ============================================
+# 
+# FREE PLAN:
+# - 512 MB RAM
+# - 0.1 CPU
+# - Cold start (30-60s inactivity sonrası)
+# - Aylık 750 saat
+# - Yeterli: Test ve düşük trafik
+#
+# STARTER PLAN ($7/month):
+# - 512 MB RAM
+# - 0.5 CPU
+# - Always on (cold start yok)
+# - Önerilen: Production kullanım
+#
+# STANDARD PLAN ($25/month):
+# - 2 GB RAM
+# - 1 CPU
+# - Always on
+# - Önerilen: Yüksek trafik
+#
+# ============================================
+
+# ============================================
+# ALTERNATIVE: Aptfile (FFmpeg için)
+# ============================================
+# Eğer buildCommand'da apt-get çalışmazsa,
+# proje root'una "Aptfile" dosyası ekleyin:
+#
+# Aptfile içeriği:
+# ffmpeg
+#
+# ============================================
