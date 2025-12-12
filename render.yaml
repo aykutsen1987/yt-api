@@ -1,93 +1,13 @@
-# ============================================
-# RENDER Deployment Configuration
-# YouTube to MP3/M4A Converter API
-# ============================================
-
 services:
   - type: web
-    name: yt-api
-    env: python
-    region: oregon
-    plan: free
-    
-    # ✅ SADECE BU KALMALI
+    name: mp3-api
+    runtime: python
+    repo: .
     buildCommand: pip install -r requirements.txt
-    
-    # ✅ Start Command
-    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT --workers 2
-    
-    # ✅ Environment Variables
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: PYTHON_VERSION
-        value: 3.11.0
-      
-      - key: PORT
-        value: 10000
-      
-      - key: LOG_LEVEL
-        value: info
-      
-      - key: WORKERS
-        value: 2
-      
-      # ✅ FFmpeg path (RENDER'da default)
+        value: 3.11
       - key: FFMPEG_PATH
         value: /usr/bin/ffmpeg
-      
-      # ✅ Temp directory
-      - key: TEMP_DIR
-        value: /tmp
-    
-    # ✅ Health Check
-    healthCheckPath: /health
-    
-    # ✅ Auto Deploy (GitHub push'ta otomatik deploy)
     autoDeploy: true
-    
-    # ✅ Branch
-    branch: main  # veya master
-    
-    # ✅ Root Directory (eğer subdirectory'deyse)
-    # rootDir: backend
-    
-    # ✅ Disk (persistent storage - opsiyonel)
-    # disk:
-    #   name: yt-api-disk
-    #   mountPath: /data
-    #   sizeGB: 1
-
-# ============================================
-# RENDER PLAN RECOMMENDATIONS
-# ============================================
-# 
-# FREE PLAN:
-# - 512 MB RAM
-# - 0.1 CPU
-# - Cold start (30-60s inactivity sonrası)
-# - Aylık 750 saat
-# - Yeterli: Test ve düşük trafik
-#
-# STARTER PLAN ($7/month):
-# - 512 MB RAM
-# - 0.5 CPU
-# - Always on (cold start yok)
-# - Önerilen: Production kullanım
-#
-# STANDARD PLAN ($25/month):
-# - 2 GB RAM
-# - 1 CPU
-# - Always on
-# - Önerilen: Yüksek trafik
-#
-# ============================================
-
-# ============================================
-# ALTERNATIVE: Aptfile (FFmpeg için)
-# ============================================
-# Eğer buildCommand'da apt-get çalışmazsa,
-# proje root'una "Aptfile" dosyası ekleyin:
-#
-# Aptfile içeriği:
-# ffmpeg
-#
-# ============================================
