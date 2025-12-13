@@ -50,7 +50,7 @@ def convert_to_mp3(youtube_url: str):
                 "preferredcodec": "mp3",
                 "preferredquality": "128",
             }],
-            "js_runtimes": ["node"],  # JS solver Node.js ile
+            "js_runtimes": {"node": {}},  # Doğru # JS solver Node.js ile
         }
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
