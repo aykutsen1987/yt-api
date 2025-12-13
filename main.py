@@ -1,16 +1,25 @@
 import os
 import uuid
 import shutil
-import yt_dlp
 import tempfile
+import yt_dlp
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, HttpUrl
+from pydantic import BaseModel
 
-app = FastAPI(title="YT to MP3 API", version="2.0")
+# =========================
+# FASTAPI APP
+# =========================
+app = FastAPI(
+    title="YouTube to MP3 API",
+    version="2.1"
+)
 
+# =========================
 # CORS
+# =========================
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -18,72 +27,112 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# =========================
+# REQUEST MODEL
+# (HttpUrl KULLANMIYORUZ → HATA ÇÖZÜLDÜ)
+# =========================
 class YouTubeRequest(BaseModel):
-    url: HttpUrl
+    url: str
 
+# =========================
+# OUTPUT DIRECTORY
+# =========================
 OUTPUT_DIR = "/tmp/mp3"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-def convert_to_mp3(url: str):
+# =========================
+# CORE FUNCTION
+# =========================
+def convert_to_mp3(youtube_url: str):
     temp_dir = tempfile.mkdtemp()
-    outtmpl = os.path.join(temp_dir, "%(id)s.%(ext)s")
 
-    ydl_opts = {
-        "format": "bestaudio/best",
-        "noplaylist": True,
-        "outtmpl": outtmpl,
-        "quiet": True,
-        "postprocessors": [{
-            "key": "FFmpegExtractAudio",
-            "preferredcodec": "mp3",
-            "preferredquality": "128"
-        }],
-    }
+    try:
+        # --- cookies.txt oluştur ---
+        cookies_path = os.path.join(temp_dir, "cookies.txt")
+        cookies_env = os.getenv("YT_COOKIES")
 
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=True)
+        if cookies_env:
+            with open(cookies_path, "w", encoding="utf-8") as f:
+                f.write(cookies_env)
 
-    mp3_file = None
-    for f in os.listdir(temp_dir):
-        if f.endswith(".mp3"):
-            mp3_file = os.path.join(temp_dir, f)
+        output_template = os.path.join(temp_dir, "%(id)s.%(ext)s")
 
-    if not mp3_file:
-        raise Exception("MP3 üretilemedi")
+        ydl_opts = {
+            "format": "bestaudio/best",
+            "noplaylist": True,
+            "outtmpl": output_template,
+            "quiet": True,
+            "nocheckcertificate": True,
+            "user_agent": "Mozilla/5.0",
+            "cookies": cookies_path if cookies_env else None,
+            "postprocessors": [
+                {
+                    "key": "FFmpegExtractAudio",
+                    "preferredcodec": "mp3",
+                    "preferredquality": "128",
+                }
+            ],
+        }
 
-    final_name = f"{uuid.uuid4()}.mp3"
-    final_path = os.path.join(OUTPUT_DIR, final_name)
-    shutil.move(mp3_file, final_path)
-    shutil.rmtree(temp_dir)
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(youtube_url, download=True)
 
-    return {
-        "title": info.get("title", "Unknown"),
-        "duration": info.get("duration", 0),
-        "file": final_name
-    }
+        mp3_file = None
+        for f in os.listdir(temp_dir):
+            if f.endswith(".mp3"):
+                mp3_file = os.path.join(temp_dir, f)
+                break
 
+        if not mp3_file:
+            raise Exception("MP3 dosyası üretilemedi")
+
+        final_name = f"{uuid.uuid4()}.mp3"
+        final_path = os.path.join(OUTPUT_DIR, final_name)
+        shutil.move(mp3_file, final_path)
+
+        return {
+            "title": info.get("title", "Unknown"),
+            "duration": info.get("duration", 0),
+            "filename": final_name,
+        }
+
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+# =========================
+# API ENDPOINT
+# =========================
 @app.post("/api/mp3")
 async def create_mp3(req: YouTubeRequest):
     try:
-       
-        data = convert_to_mp3(str(req.url))
-        base = os.getenv("RENDER_EXTERNAL_URL", "")
+        data = convert_to_mp3(req.url)
+        base_url = os.getenv("RENDER_EXTERNAL_URL", "").rstrip("/")
+
         return {
             "status": "success",
-            "mp3Url": f"{base}/files/{data['file']}",
+            "mp3Url": f"{base_url}/files/{data['filename']}",
             "title": data["title"],
-            "duration": data["duration"]
+            "duration": data["duration"],
         }
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+# =========================
+# FILE SERVE
+# =========================
 @app.get("/files/{filename}")
 async def serve_file(filename: str):
-    path = os.path.join(OUTPUT_DIR, filename)
-    if not os.path.exists(path):
-        raise HTTPException(404, "Dosya yok")
-    return FileResponse(path, media_type="audio/mpeg")
+    file_path = os.path.join(OUTPUT_DIR, filename)
 
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="Dosya bulunamadı")
+
+    return FileResponse(file_path, media_type="audio/mpeg")
+
+# =========================
+# HEALTH CHECK
+# =========================
 @app.get("/health")
 def health():
     return {"status": "ok"}
