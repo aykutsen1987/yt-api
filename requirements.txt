@@ -1,7 +1,5 @@
 fastapi
 uvicorn
 yt-dlp
-psutil
 python-multipart
 aiofiles
-pydantic
