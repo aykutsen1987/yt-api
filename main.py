@@ -14,7 +14,7 @@ from pydantic import BaseModel
 # =========================
 app = FastAPI(
     title="YouTube to MP3 API",
-    version="2.1"
+    version="2.2"
 )
 
 # =========================
@@ -29,7 +29,6 @@ app.add_middleware(
 
 # =========================
 # REQUEST MODEL
-# (HttpUrl KULLANMIYORUZ → HATA ÇÖZÜLDÜ)
 # =========================
 class YouTubeRequest(BaseModel):
     url: str
@@ -48,10 +47,11 @@ def convert_to_mp3(youtube_url: str):
 
     try:
         # --- cookies.txt oluştur ---
-        cookies_path = os.path.join(temp_dir, "cookies.txt")
         cookies_env = os.getenv("YT_COOKIES")
+        cookies_path = None
 
         if cookies_env:
+            cookies_path = os.path.join(temp_dir, "cookies.txt")
             with open(cookies_path, "w", encoding="utf-8") as f:
                 f.write(cookies_env)
 
@@ -61,17 +61,34 @@ def convert_to_mp3(youtube_url: str):
             "format": "bestaudio/best",
             "noplaylist": True,
             "outtmpl": output_template,
+
+            # 🔥 EN KRİTİK SATIR
+            "cookiefile": cookies_path,
+
+            # Bot algısını düşürür
+            "http_headers": {
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/121.0.0.0 Safari/537.36"
+                )
+            },
+
+            # YouTube extractor fix
+            "extractor_args": {
+                "youtube": {
+                    "player_client": ["web"]
+                }
+            },
+
+            "postprocessors": [{
+                "key": "FFmpegExtractAudio",
+                "preferredcodec": "mp3",
+                "preferredquality": "128",
+            }],
+
             "quiet": True,
             "nocheckcertificate": True,
-            "user_agent": "Mozilla/5.0",
-            "cookies": cookies_path if cookies_env else None,
-            "postprocessors": [
-                {
-                    "key": "FFmpegExtractAudio",
-                    "preferredcodec": "mp3",
-                    "preferredquality": "128",
-                }
-            ],
         }
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
