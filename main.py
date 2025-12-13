@@ -65,7 +65,8 @@ def convert_to_mp3(url: str):
 @app.post("/api/mp3")
 async def create_mp3(req: YouTubeRequest):
     try:
-        data = convert_to_mp3(req.url)
+       
+        data = convert_to_mp3(str(req.url))
         base = os.getenv("RENDER_EXTERNAL_URL", "")
         return {
             "status": "success",
