@@ -1,13 +1,9 @@
 services:
   - type: web
-    name: mp3-api
+    name: yt-mp3-api
     runtime: python
-    repo: .
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: PYTHON_VERSION
         value: 3.11
-      - key: FFMPEG_PATH
-        value: /usr/bin/ffmpeg
-    autoDeploy: true
