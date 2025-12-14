@@ -1,13 +1,18 @@
 services:
-  - type: web
-    name: mp3-api
-    runtime: python
-    repo: .
-    buildCommand: bash build.sh
-    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
-    envVars:
-      - key: PYTHON_VERSION
-        value: 3.11
-      - key: YT_COOKIES
-        value: ""   # Buraya test cookies eklenebilir
-    autoDeploy: true
+- type: web # Ana API hizmetimiz
+  name: mp3dmeta-api
+  env: python
+  buildCommand: |
+    # build.sh dosyasını çalıştır, bu hem pip bağımlılıklarını hem de yt-dlp'yi kurar.
+    chmod +x build.sh && ./build.sh
+  startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+  # Build sırasında Aptfile'ı kullanmak için bu ayar önemlidir.
+  plan: starter # Starter veya Pro planını deneyin (Ücretsiz/Free plan bu kadar ağır işleme izin vermeyebilir)
+  envVars:
+    - key: YOUTUBE_API_KEY
+      value: "YOUR_YOUTUBE_API_KEY_HERE" # Render ortam değişkenlerinde ayarlayın
+    - key: AWS_S3_BUCKET
+      value: "YOUR_S3_BUCKET_URL" # S3'e dosya yüklemek için
+  # uzun süreli işlemler başlattığınız için timeout ayarını yükseltmek faydalı olabilir,
+  # ancak bu Render tarafından sınırlıdır. Arka plan işi kullanmak en iyi çözümdür.
+  # healthCheckPath: /
