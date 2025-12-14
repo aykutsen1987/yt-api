@@ -5,9 +5,9 @@ import os
 import uuid
 import asyncio
 import subprocess
+import json
 
 from googleapiclient.discovery import build
-from youtubesearchpython import VideosSearch
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -20,7 +20,6 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# In-memory job tracking (prod'da Redis önerilir)
 JOB_STATUS: Dict[str, Dict] = {}
 
 # --------------------------------------------------
@@ -73,9 +72,6 @@ class ConvertResponse(BaseModel):
 # HELPERS
 # --------------------------------------------------
 def parse_duration(duration: str) -> int:
-    """
-    '1:02:30' -> seconds
-    """
     parts = duration.split(":")
     try:
         parts = list(map(int, parts))
@@ -86,8 +82,6 @@ def parse_duration(duration: str) -> int:
         return parts[0] * 3600 + parts[1] * 60 + parts[2]
     if len(parts) == 2:
         return parts[0] * 60 + parts[1]
-    if len(parts) == 1:
-        return parts[0]
     return 0
 
 # --------------------------------------------------
@@ -121,7 +115,6 @@ async def run_conversion(video_url: str, job_id: str, title: str):
             text=True
         )
 
-        # Burada S3 upload yapılabilir (boto3)
         download_url = f"{AWS_S3_BASE_URL}{job_id}.mp3"
 
         JOB_STATUS[job_id] = {
@@ -158,52 +151,65 @@ async def search_with_api(query: str, api_key: str) -> List[Track]:
     results: List[Track] = []
 
     for item in response.get("items", []):
-        video_id = item["id"]["videoId"]
+        vid = item["id"]["videoId"]
 
         results.append(Track(
-            id=video_id,
+            id=vid,
             title=item["snippet"]["title"],
             artist=item["snippet"]["channelTitle"],
             channel=item["snippet"]["channelTitle"],
             thumbnailUrl=item["snippet"]["thumbnails"]["default"]["url"],
-            videoUrl=f"https://www.youtube.com/watch?v={video_id}",
-            duration=300,  # Basitlik için sabit
+            videoUrl=f"https://www.youtube.com/watch?v={vid}",
+            duration=300,
             hasCopyright=False
         ))
 
     return results
 
-async def search_with_scraper(query: str) -> List[Track]:
-    def _search():
-        return VideosSearch(query, limit=10).result()
+async def search_with_yt_dlp(query: str) -> List[Track]:
+    command = [
+        "yt-dlp",
+        f"ytsearch10:{query}",
+        "--dump-json",
+        "--skip-download"
+    ]
 
-    data = await asyncio.to_thread(_search)
-    videos = data.get("result", [])
+    try:
+        result = await asyncio.to_thread(
+            subprocess.run,
+            command,
+            capture_output=True,
+            text=True,
+            check=True
+        )
 
-    results: List[Track] = []
+        results: List[Track] = []
 
-    for v in videos:
-        duration_str = v.get("duration", "0:00")
+        for line in result.stdout.splitlines():
+            data = json.loads(line)
 
-        results.append(Track(
-            id=v["id"],
-            title=v["title"],
-            artist=v.get("channel", {}).get("name", "Unknown"),
-            channel=v.get("channel", {}).get("name", "Unknown"),
-            thumbnailUrl=v["thumbnails"][0]["url"],
-            videoUrl=v["link"],
-            duration=parse_duration(duration_str),
-            hasCopyright=False
-        ))
+            results.append(Track(
+                id=data["id"],
+                title=data["title"],
+                artist=data.get("uploader", "Unknown"),
+                channel=data.get("uploader", "Unknown"),
+                thumbnailUrl=data["thumbnail"],
+                videoUrl=data["webpage_url"],
+                duration=int(data.get("duration", 0)),
+                hasCopyright=False
+            ))
 
-    return results
+        return results
+
+    except Exception:
+        return []
 
 # --------------------------------------------------
 # ENDPOINTS
 # --------------------------------------------------
 @app.get("/api/search", response_model=SearchResponse)
 async def search(q: str = Query(..., min_length=3)):
-    # 1) API KEY POOL
+    # 1) API FIRST
     for key in API_KEYS:
         try:
             return SearchResponse(
@@ -212,20 +218,15 @@ async def search(q: str = Query(..., min_length=3)):
         except Exception:
             continue
 
-    # 2) SCRAPER FALLBACK
-    try:
-        return SearchResponse(
-            results=await search_with_scraper(q)
-        )
-    except Exception:
-        raise HTTPException(
-            status_code=503,
-            detail="Search service unavailable"
-        )
+    # 2) yt-dlp SCRAPER FALLBACK
+    results = await search_with_yt_dlp(q)
+    if not results:
+        raise HTTPException(503, "Search service unavailable")
+
+    return SearchResponse(results=results)
 
 @app.post("/api/convert/start", response_model=ConvertResponse)
 async def start_convert(track: Track):
-    # 15 dk altı -> mobil
     if track.duration < 900:
         raise HTTPException(
             status_code=400,
