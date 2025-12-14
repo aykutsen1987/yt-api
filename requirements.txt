@@ -3,5 +3,5 @@ uvicorn
 httpx
 python-dotenv
 google-api-python-client
-youtube-search-python
 yt-dlp
+youtubesearchpython
