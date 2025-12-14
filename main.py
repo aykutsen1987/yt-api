@@ -5,22 +5,43 @@ import os
 import uuid
 import asyncio
 import subprocess
+import json
 import re
-from youtube_search import YoutubeSearch # Yeni arama kütüphanesi
-from datetime import timedelta
+from youtube_search import YoutubeSearch # Zero-Quota Yedek
+from googleapiclient.discovery import build # Resmi YouTube API
 
 # --- UYGULAMA TANIMI ---
 app = FastAPI(
-    title="Mp3DMeta Zero-Quota Backend API",
-    description="Doğrudan web scraping ile arama ve yt-dlp ile dönüşüm servisi.",
+    title="Mp3DMeta Hybrid Backend API",
+    description="Kota yedekli arama ve yt-dlp ile dönüşüm servisi.",
     version="1.0.0"
 )
 
-# Global olarak iş durumlarını saklamak için basit bir sözlük (Redis/Veritabanı simülasyonu)
+# Global Durum (Job ID takibi)
 JOB_STATUS: Dict[str, Dict] = {} 
 
-# --- PYDANTIC MODELLERİ ---
-# ... (Track, SearchResponse, ConvertResponse modelleri aynı kalır) ...
+# --- Ortam Değişkenleri ve API Anahtarları ---
+# Birden fazla anahtarı okur (Örn: YOUTUBE_API_KEY_1, YOUTUBE_API_KEY_2, vb.)
+def get_api_keys():
+    keys = []
+    # 1'den 5'e kadar anahtarları kontrol et (veya eklediğiniz kadar)
+    for i in range(1, 6):
+        key = os.getenv(f"YOUTUBE_API_KEY_{i}")
+        if key:
+            keys.append(key)
+    # Eğer sadece tek bir anahtar tanımlandıysa (şimdilik yapacağınız gibi)
+    if not keys:
+        single_key = os.getenv("YOUTUBE_API_KEY")
+        if single_key:
+            keys.append(single_key)
+    return keys
+
+API_KEY_POOL = get_api_keys()
+API_SERVICE_NAME = "youtube"
+API_VERSION = "v3"
+
+# --- PYDANTIC MODELLERİ VE YARDIMCI FONKSİYONLAR ---
+# ... (Track, SearchResponse, ConvertResponse modelleri ve parse_duration_to_seconds fonksiyonu önceki yanıttaki gibi kalır.) ...
 
 class Track(BaseModel):
     id: str
@@ -39,62 +60,42 @@ class ConvertResponse(BaseModel):
     jobId: str
     message: str
 
-
-# --- YARDIMCI FONKSİYONLAR ---
-
 def parse_duration_to_seconds(duration_str: str) -> int:
-    """Süre stringini (örn: '1:30' veya '1:00:30') saniyeye çevirir."""
     parts = list(map(int, duration_str.split(':')))
     seconds = 0
     if len(parts) == 3:
-        seconds += parts[0] * 3600 # Saat
-        seconds += parts[1] * 60  # Dakika
-        seconds += parts[2]       # Saniye
+        seconds += parts[0] * 3600
+        seconds += parts[1] * 60
+        seconds += parts[2]
     elif len(parts) == 2:
-        seconds += parts[0] * 60  # Dakika
-        seconds += parts[1]       # Saniye
-    else: # Sadece saniye veya yanlış format
+        seconds += parts[0] * 60
+        seconds += parts[1]
+    else:
         seconds = parts[0] if parts else 0
     return seconds
-
-
+    
+# ... (run_conversion_task fonksiyonu önceki yanıttaki gibi kalır) ...
 async def run_conversion_task(video_url: str, job_id: str, title: str):
-    """FFmpeg ve yt-dlp kullanarak video'yu MP3'e dönüştürür."""
-    # ... (run_conversion_task fonksiyonu önceki yanıttakiyle aynı kalır) ...
     JOB_STATUS[job_id] = {"status": "PROCESSING", "progress": 0, "title": title}
     output_path_temp = f"/tmp/{job_id}.mp3"
     
-    # yt-dlp komutu
     command = [
-        "yt-dlp",
-        "--extract-audio", 
-        "--audio-format", "mp3", 
-        "--audio-quality", "192K",
-        "--no-progress",
-        "-o", output_path_temp,
-        video_url
+        "yt-dlp", "--extract-audio", "--audio-format", "mp3", 
+        "--audio-quality", "192K", "--no-progress", "-o", output_path_temp, video_url
     ]
     
     print(f"[{job_id}] Conversion started for: {title}")
 
     try:
         def sync_conversion():
-            return subprocess.run(
-                command,
-                capture_output=True,
-                text=True,
-                check=True
-            )
+            return subprocess.run(command, capture_output=True, text=True, check=True)
         
         await asyncio.to_thread(sync_conversion)
         
-        # S3 yüklemesi atlandı, varsayılan URL dönüldü
         final_download_url = f"https://your-s3-storage.com/{job_id}.mp3" 
         
         JOB_STATUS[job_id] = {
-            "status": "COMPLETED", 
-            "progress": 100, 
-            "downloadUrl": final_download_url
+            "status": "COMPLETED", "progress": 100, "downloadUrl": final_download_url
         }
         
     except subprocess.CalledProcessError as e:
@@ -110,37 +111,53 @@ async def run_conversion_task(video_url: str, job_id: str, title: str):
 
 
 # ----------------------------------------------------
-# 1. Endpoint: Müzik Arama (Sıfır Kota Kullanımı)
+# Arama Fonksiyonları
 # ----------------------------------------------------
-@app.get("/api/search", response_model=SearchResponse, tags=["Search"])
-async def search_music(q: str = Query(..., min_length=3)):
-    """YouTube web scraping kullanarak müzik arar (Kotadan bağımsız)."""
-    
-    try:
-        # YouTube'u arama sorgusu ile tarar
-        # 10 sonuç, müzik filtresi (varsa)
-        results_json = await asyncio.to_thread(
-            YoutubeSearch, 
-            q, 
-            max_results=10
-        )
-        
-        data = results_json.to_json()
-        search_results = json.loads(data).get('videos', [])
-        
-    except Exception as e:
-        print(f"Scraping Hatası: {str(e)}")
-        # Scraping engellenmiş olabilir veya format değişmiş olabilir.
-        raise HTTPException(
-            status_code=500, 
-            detail="Arama servisimiz geçici olarak kullanılamıyor. Lütfen tekrar deneyin."
-        )
 
+async def search_with_api(query: str, api_key: str) -> List[Track]:
+    """Resmi YouTube API ile arama yapar."""
+    
+    # Resmi API'de 'build' senkron bir fonksiyondur, bu yüzden bir thread'de çalıştırmak en iyisidir.
+    youtube = await asyncio.to_thread(
+        build, API_SERVICE_NAME, API_VERSION, developerKey=api_key
+    )
+
+    request = youtube.search().list(
+        q=query,
+        part="snippet",
+        type="video",
+        maxResults=10
+    )
+    
+    response = await asyncio.to_thread(request.execute)
+
+    results = []
+    for item in response.get("items", []):
+        video_id = item["id"]["videoId"]
+        # API'den süre bilgisi almak (ayrı bir call gerektirir, şimdilik varsayımsal)
+        duration_seconds = 300 
+        
+        results.append(Track(
+            id=video_id,
+            title=item["snippet"]["title"],
+            artist=item["snippet"].get("channelTitle", "Bilinmiyor"),
+            channel=item["snippet"].get("channelTitle", "Bilinmiyor"),
+            thumbnailUrl=item["snippet"]["thumbnails"]["default"]["url"],
+            videoUrl=f"https://www.youtube.com/watch?v={video_id}",
+            duration=duration_seconds,
+            hasCopyright=False
+        ))
+    return results
+
+async def search_with_scraper(query: str) -> List[Track]:
+    """Zero-Quota Scraping ile arama yapar."""
+    results_json = await asyncio.to_thread(YoutubeSearch, query, max_results=10)
+    data = results_json.to_json()
+    search_results = json.loads(data).get('videos', [])
+    
     results = []
     for item in search_results:
         video_id = item["id"]
-        
-        # Duration formatı: "1:30", "1:00:30" vb.
         duration_seconds = parse_duration_to_seconds(item.get("duration", "0:00")) 
         
         results.append(Track(
@@ -148,23 +165,58 @@ async def search_music(q: str = Query(..., min_length=3)):
             title=item["title"],
             artist=item.get("channel", "Bilinmiyor"),
             channel=item.get("channel", "Bilinmiyor"),
-            thumbnailUrl=item.get("thumbnails", [""])[0], # İlk küçük resmi al
+            thumbnailUrl=item.get("thumbnails", [""])[0],
             videoUrl=f"https://www.youtube.com/watch?v={video_id}",
             duration=duration_seconds,
-            hasCopyright=False # Telif kontrolünü atla
+            hasCopyright=False
         ))
+    return results
 
-    return SearchResponse(results=results)
 
 # ----------------------------------------------------
-# 2. Endpoint: Uzun Dönüşümü Başlatma
+# 1. Endpoint: HİBRİT Müzik Arama
 # ----------------------------------------------------
-@app.post("/api/convert/start", tags=["Conversion"])
+@app.get("/api/search", response_model=SearchResponse, tags=["Search"])
+async def search_music_hybrid(q: str = Query(..., min_length=3)):
+    """
+    Önce API Havuzunu dener. Başarısız olursa (Kota) Zero-Quota Scraping'e geçer.
+    """
+    
+    # --- 1. API Havuzunu Dene (Primary Search) ---
+    if API_KEY_POOL:
+        for i, key in enumerate(API_KEY_POOL):
+            try:
+                print(f"INFO: Trying API Key #{i+1}...")
+                results = await search_with_api(q, key)
+                print(f"INFO: API Key #{i+1} Succeeded.")
+                return SearchResponse(results=results)
+                
+            except Exception as e:
+                # API başarısız oldu (403 Forbidden - Kota dolmuş olabilir)
+                print(f"WARNING: API Key #{i+1} Failed. Trying next or falling back. Error: {e}")
+                continue # Bir sonraki anahtarı dene
+                
+    
+    # --- 2. Zero-Quota Scraping'e Geç (Fallback) ---
+    print("WARNING: API Key pool exhausted or empty. Falling back to Zero-Quota Scraper.")
+    try:
+        results = await search_with_scraper(q)
+        print("INFO: Scraper Succeeded.")
+        return SearchResponse(results=results)
+    except Exception as e:
+        print(f"CRITICAL: Scraper failed. Error: {e}")
+        raise HTTPException(
+            status_code=503, 
+            detail="Tüm arama servislerimiz geçici olarak kullanılamıyor."
+        )
+
+
+# ----------------------------------------------------
+# Diğer Endpointler (Aynı Kalır)
+# ----------------------------------------------------
+
+@app.post("/api/convert/start", response_model=ConvertResponse, tags=["Conversion"])
 async def start_conversion_endpoint(track: Track):
-    """
-    Uzun süreli video dönüşümünü arka plan thread'inde başlatır ve hemen yanıt döner.
-    """
-    # Uygulamanızın 15 dk (900s) üstü kuralını kontrol et.
     if track.duration <= 900:
          raise HTTPException(status_code=400, detail="Bu video cihazda (FFmpegKit) işlenmelidir.")
          
@@ -176,22 +228,13 @@ async def start_conversion_endpoint(track: Track):
         message="Dönüşüm arka planda başlatıldı. Durum kontrolü için /api/convert/status kullanın."
     )
 
-# ----------------------------------------------------
-# 3. Endpoint: Durum Kontrolü
-# ----------------------------------------------------
 @app.get("/api/convert/status", tags=["Conversion"])
 def get_conversion_status(jobId: str):
-    """ Dönüşüm işinin durumunu döndürür. """
     status = JOB_STATUS.get(jobId)
     if not status:
         raise HTTPException(status_code=404, detail="Job ID bulunamadı.")
-    
     return status
 
-# ----------------------------------------------------
-# 4. Endpoint: Telif Kontrolü
-# ----------------------------------------------------
 @app.get("/api/copyright-check", tags=["Search"])
 def check_copyright(videoId: str):
-    """ Telif hakkı kontrolü yapar. """
     return {"hasCopyright": False}
