@@ -2,8 +2,5 @@ fastapi
 uvicorn
 httpx
 python-dotenv
-# YouTube Data API yerine arama için kullanılan kütüphane
 youtube-search-python 
-# Video indirme ve işleme için (bu komut satırı aracıdır, ama bu kütüphane Python'da bunu yönetmeye yarar)
-yt-dlp 
-# Diğer kütüphaneleriniz...
+yt-dlp
