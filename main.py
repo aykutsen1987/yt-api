@@ -28,9 +28,9 @@ JOB_STATUS: Dict[str, Dict] = {}
 def get_api_keys():
     keys = []
     for i in range(1, 11):
-        k = os.getenv(f"YOUTUBE_API_KEY_{i}")
-        if k:
-            keys.append(k)
+        key = os.getenv(f"YOUTUBE_API_KEY_{i}")
+        if key:
+            keys.append(key)
 
     if not keys:
         single = os.getenv("YOUTUBE_API_KEY")
@@ -71,18 +71,11 @@ class ConvertResponse(BaseModel):
 # --------------------------------------------------
 # HELPERS
 # --------------------------------------------------
-def parse_duration(duration: str) -> int:
-    parts = duration.split(":")
+def parse_duration(seconds) -> int:
     try:
-        parts = list(map(int, parts))
-    except ValueError:
+        return int(seconds)
+    except Exception:
         return 0
-
-    if len(parts) == 3:
-        return parts[0] * 3600 + parts[1] * 60 + parts[2]
-    if len(parts) == 2:
-        return parts[0] * 60 + parts[1]
-    return 0
 
 # --------------------------------------------------
 # CONVERSION TASK
@@ -115,12 +108,10 @@ async def run_conversion(video_url: str, job_id: str, title: str):
             text=True
         )
 
-        download_url = f"{AWS_S3_BASE_URL}{job_id}.mp3"
-
         JOB_STATUS[job_id] = {
             "status": "COMPLETED",
             "progress": 100,
-            "downloadUrl": download_url
+            "downloadUrl": f"{AWS_S3_BASE_URL}{job_id}.mp3"
         }
 
     except subprocess.CalledProcessError as e:
@@ -148,7 +139,7 @@ async def search_with_api(query: str, api_key: str) -> List[Track]:
 
     response = await asyncio.to_thread(request.execute)
 
-    results: List[Track] = []
+    results = []
 
     for item in response.get("items", []):
         vid = item["id"]["videoId"]
@@ -174,42 +165,39 @@ async def search_with_yt_dlp(query: str) -> List[Track]:
         "--skip-download"
     ]
 
-    try:
-        result = await asyncio.to_thread(
-            subprocess.run,
-            command,
-            capture_output=True,
-            text=True,
-            check=True
-        )
+    result = await asyncio.to_thread(
+        subprocess.run,
+        command,
+        capture_output=True,
+        text=True
+    )
 
-        results: List[Track] = []
+    results = []
 
-        for line in result.stdout.splitlines():
+    for line in result.stdout.splitlines():
+        try:
             data = json.loads(line)
-
             results.append(Track(
                 id=data["id"],
                 title=data["title"],
                 artist=data.get("uploader", "Unknown"),
                 channel=data.get("uploader", "Unknown"),
-                thumbnailUrl=data["thumbnail"],
-                videoUrl=data["webpage_url"],
-                duration=int(data.get("duration", 0)),
+                thumbnailUrl=data.get("thumbnail", ""),
+                videoUrl=data.get("webpage_url", ""),
+                duration=parse_duration(data.get("duration", 0)),
                 hasCopyright=False
             ))
+        except Exception:
+            continue
 
-        return results
-
-    except Exception:
-        return []
+    return results
 
 # --------------------------------------------------
 # ENDPOINTS
 # --------------------------------------------------
 @app.get("/api/search", response_model=SearchResponse)
 async def search(q: str = Query(..., min_length=3)):
-    # 1) API FIRST
+    # 1️⃣ API
     for key in API_KEYS:
         try:
             return SearchResponse(
@@ -218,7 +206,7 @@ async def search(q: str = Query(..., min_length=3)):
         except Exception:
             continue
 
-    # 2) yt-dlp SCRAPER FALLBACK
+    # 2️⃣ yt-dlp fallback
     results = await search_with_yt_dlp(q)
     if not results:
         raise HTTPException(503, "Search service unavailable")
@@ -230,7 +218,7 @@ async def start_convert(track: Track):
     if track.duration < 900:
         raise HTTPException(
             status_code=400,
-            detail="Bu video mobil cihazda (FFmpegKit) işlenmelidir."
+            detail="Bu video mobil cihazda işlenmelidir."
         )
 
     job_id = str(uuid.uuid4())
@@ -248,7 +236,3 @@ def convert_status(jobId: str):
     if jobId not in JOB_STATUS:
         raise HTTPException(404, "Job not found")
     return JOB_STATUS[jobId]
-
-@app.get("/api/copyright-check")
-def copyright_check(videoId: str):
-    return {"hasCopyright": False}
