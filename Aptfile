@@ -1,5 +1,3 @@
-# FFmpeg ve FFprobe video/ses dönüştürme ve işleme için gereklidir.
 ffmpeg
-# yt-dlp için ek JavaScript runtime (gerekli olabilir)
 nodejs
 build-essential
