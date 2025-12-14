@@ -154,4 +154,57 @@ async def search_with_scraper(query: str) -> List[Track]:
     data = json.loads(raw).get("videos", [])
 
     results = []
-    for ite
+    for item in data:
+        results.append(Track(
+            id=item["id"],
+            title=item["title"],
+            artist=item.get("channel", "Unknown"),
+            channel=item.get("channel", "Unknown"),
+            thumbnailUrl=item.get("thumbnails", [""])[0],
+            videoUrl=f"https://www.youtube.com/watch?v={item['id']}",
+            duration=parse_duration(item.get("duration", "0:00")),
+            hasCopyright=False
+        ))
+    return results
+
+# --------------------------------------------------
+# ENDPOINTS
+# --------------------------------------------------
+@app.get("/api/search", response_model=SearchResponse)
+async def search(q: str = Query(..., min_length=3)):
+    for key in API_KEYS:
+        try:
+            return SearchResponse(results=await search_with_api(q, key))
+        except Exception:
+            continue
+
+    try:
+        return SearchResponse(results=await search_with_scraper(q))
+    except Exception:
+        raise HTTPException(503, "Search service unavailable")
+
+@app.post("/api/convert/start", response_model=ConvertResponse)
+async def start_convert(track: Track):
+    if track.duration < 900:
+        raise HTTPException(
+            400,
+            "Bu video mobil cihazda (FFmpegKit) işlenmelidir."
+        )
+
+    job_id = str(uuid.uuid4())
+    asyncio.create_task(run_conversion(track.videoUrl, job_id, track.title))
+
+    return ConvertResponse(
+        jobId=job_id,
+        message="Conversion started"
+    )
+
+@app.get("/api/convert/status")
+def convert_status(jobId: str):
+    if jobId not in JOB_STATUS:
+        raise HTTPException(404, "Job not found")
+    return JOB_STATUS[jobId]
+
+@app.get("/api/copyright-check")
+def copyright_check(videoId: str):
+    return {"hasCopyright": False}
