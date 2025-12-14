@@ -17,32 +17,33 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Global Durum (Job ID takibi)
+# Global Durum
 JOB_STATUS: Dict[str, Dict] = {} 
 
-# --- Ortam Değişkenleri ve API Anahtarları ---
-# Birden fazla anahtarı okur (Örn: YOUTUBE_API_KEY_1, YOUTUBE_API_KEY_2, vb.)
+# --- GÜNCELLENMİŞ KRİTİK FONKSİYON ---
 def get_api_keys():
+    """Ortam değişkenlerinden 10 adede kadar API anahtarı okur."""
     keys = []
-    # 1'den 5'e kadar anahtarları kontrol et (veya eklediğiniz kadar)
-    for i in range(1, 6):
+    # 1'den 10'a kadar anahtarları kontrol et
+    for i in range(1, 11): # <-- DÖNGÜ SINIRI 10'a ÇIKARILDI
         key = os.getenv(f"YOUTUBE_API_KEY_{i}")
         if key:
             keys.append(key)
-    # Eğer sadece tek bir anahtar tanımlandıysa (şimdilik yapacağınız gibi)
+            
+    # Eğer hiç numaralı anahtar tanımlı değilse, YOUTUBE_API_KEY adlı tekil anahtarı dene
     if not keys:
         single_key = os.getenv("YOUTUBE_API_KEY")
         if single_key:
             keys.append(single_key)
+            
     return keys
 
 API_KEY_POOL = get_api_keys()
 API_SERVICE_NAME = "youtube"
 API_VERSION = "v3"
 
-# --- PYDANTIC MODELLERİ VE YARDIMCI FONKSİYONLAR ---
-# ... (Track, SearchResponse, ConvertResponse modelleri ve parse_duration_to_seconds fonksiyonu önceki yanıttaki gibi kalır.) ...
-
+# --- PYDANTIC MODELLERİ VE YARDIMCI FONKSİYONLAR (AYNI KALIR) ---
+# ...
 class Track(BaseModel):
     id: str
     title: str
@@ -74,7 +75,6 @@ def parse_duration_to_seconds(duration_str: str) -> int:
         seconds = parts[0] if parts else 0
     return seconds
     
-# ... (run_conversion_task fonksiyonu önceki yanıttaki gibi kalır) ...
 async def run_conversion_task(video_url: str, job_id: str, title: str):
     JOB_STATUS[job_id] = {"status": "PROCESSING", "progress": 0, "title": title}
     output_path_temp = f"/tmp/{job_id}.mp3"
@@ -109,15 +109,8 @@ async def run_conversion_task(video_url: str, job_id: str, title: str):
             os.remove(output_path_temp)
             print(f"[{job_id}] Temporary file deleted.")
 
-
-# ----------------------------------------------------
-# Arama Fonksiyonları
-# ----------------------------------------------------
-
 async def search_with_api(query: str, api_key: str) -> List[Track]:
     """Resmi YouTube API ile arama yapar."""
-    
-    # Resmi API'de 'build' senkron bir fonksiyondur, bu yüzden bir thread'de çalıştırmak en iyisidir.
     youtube = await asyncio.to_thread(
         build, API_SERVICE_NAME, API_VERSION, developerKey=api_key
     )
@@ -134,7 +127,6 @@ async def search_with_api(query: str, api_key: str) -> List[Track]:
     results = []
     for item in response.get("items", []):
         video_id = item["id"]["videoId"]
-        # API'den süre bilgisi almak (ayrı bir call gerektirir, şimdilik varsayımsal)
         duration_seconds = 300 
         
         results.append(Track(
@@ -178,11 +170,6 @@ async def search_with_scraper(query: str) -> List[Track]:
 # ----------------------------------------------------
 @app.get("/api/search", response_model=SearchResponse, tags=["Search"])
 async def search_music_hybrid(q: str = Query(..., min_length=3)):
-    """
-    Önce API Havuzunu dener. Başarısız olursa (Kota) Zero-Quota Scraping'e geçer.
-    """
-    
-    # --- 1. API Havuzunu Dene (Primary Search) ---
     if API_KEY_POOL:
         for i, key in enumerate(API_KEY_POOL):
             try:
@@ -192,9 +179,9 @@ async def search_music_hybrid(q: str = Query(..., min_length=3)):
                 return SearchResponse(results=results)
                 
             except Exception as e:
-                # API başarısız oldu (403 Forbidden - Kota dolmuş olabilir)
+                # 403 Forbidden veya Kota hatası durumunda bir sonraki anahtarı dene
                 print(f"WARNING: API Key #{i+1} Failed. Trying next or falling back. Error: {e}")
-                continue # Bir sonraki anahtarı dene
+                continue
                 
     
     # --- 2. Zero-Quota Scraping'e Geç (Fallback) ---
@@ -212,7 +199,7 @@ async def search_music_hybrid(q: str = Query(..., min_length=3)):
 
 
 # ----------------------------------------------------
-# Diğer Endpointler (Aynı Kalır)
+# Diğer Endpointler (AYNI KALIR)
 # ----------------------------------------------------
 
 @app.post("/api/convert/start", response_model=ConvertResponse, tags=["Conversion"])
