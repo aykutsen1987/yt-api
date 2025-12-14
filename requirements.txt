@@ -2,5 +2,5 @@ fastapi
 uvicorn
 httpx
 python-dotenv
-youtube-search-python   <-- BU İSİM KESİNLİKLE OLMALI
+youtube-search-python   
 yt-dlp
