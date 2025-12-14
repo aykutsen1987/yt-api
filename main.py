@@ -5,10 +5,9 @@ import os
 import uuid
 import asyncio
 import subprocess
-import json
 
-from youtube_search import YoutubeSearch
 from googleapiclient.discovery import build
+from youtubesearchpython import VideosSearch
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -21,6 +20,7 @@ app = FastAPI(
     version="1.0.0"
 )
 
+# In-memory job tracking (prod'da Redis önerilir)
 JOB_STATUS: Dict[str, Dict] = {}
 
 # --------------------------------------------------
@@ -29,9 +29,9 @@ JOB_STATUS: Dict[str, Dict] = {}
 def get_api_keys():
     keys = []
     for i in range(1, 11):
-        key = os.getenv(f"YOUTUBE_API_KEY_{i}")
-        if key:
-            keys.append(key)
+        k = os.getenv(f"YOUTUBE_API_KEY_{i}")
+        if k:
+            keys.append(k)
 
     if not keys:
         single = os.getenv("YOUTUBE_API_KEY")
@@ -43,7 +43,11 @@ def get_api_keys():
 API_KEYS = get_api_keys()
 API_SERVICE_NAME = "youtube"
 API_VERSION = "v3"
-AWS_S3_BASE_URL = os.getenv("AWS_S3_BASE_URL", "https://your-s3.com/")
+
+AWS_S3_BASE_URL = os.getenv(
+    "AWS_S3_BASE_URL",
+    "https://your-s3-bucket.example/"
+)
 
 # --------------------------------------------------
 # MODELS
@@ -69,18 +73,32 @@ class ConvertResponse(BaseModel):
 # HELPERS
 # --------------------------------------------------
 def parse_duration(duration: str) -> int:
-    parts = list(map(int, duration.split(":")))
+    """
+    '1:02:30' -> seconds
+    """
+    parts = duration.split(":")
+    try:
+        parts = list(map(int, parts))
+    except ValueError:
+        return 0
+
     if len(parts) == 3:
-        return parts[0]*3600 + parts[1]*60 + parts[2]
+        return parts[0] * 3600 + parts[1] * 60 + parts[2]
     if len(parts) == 2:
-        return parts[0]*60 + parts[1]
-    return parts[0] if parts else 0
+        return parts[0] * 60 + parts[1]
+    if len(parts) == 1:
+        return parts[0]
+    return 0
 
 # --------------------------------------------------
 # CONVERSION TASK
 # --------------------------------------------------
 async def run_conversion(video_url: str, job_id: str, title: str):
-    JOB_STATUS[job_id] = {"status": "PROCESSING", "progress": 0}
+    JOB_STATUS[job_id] = {
+        "status": "PROCESSING",
+        "progress": 0,
+        "title": title
+    }
 
     output_template = f"/tmp/{job_id}.%(ext)s"
 
@@ -103,7 +121,9 @@ async def run_conversion(video_url: str, job_id: str, title: str):
             text=True
         )
 
+        # Burada S3 upload yapılabilir (boto3)
         download_url = f"{AWS_S3_BASE_URL}{job_id}.mp3"
+
         JOB_STATUS[job_id] = {
             "status": "COMPLETED",
             "progress": 100,
@@ -119,8 +139,12 @@ async def run_conversion(video_url: str, job_id: str, title: str):
 # --------------------------------------------------
 # SEARCH METHODS
 # --------------------------------------------------
-async def search_with_api(query: str, key: str) -> List[Track]:
-    youtube = build(API_SERVICE_NAME, API_VERSION, developerKey=key)
+async def search_with_api(query: str, api_key: str) -> List[Track]:
+    youtube = build(
+        API_SERVICE_NAME,
+        API_VERSION,
+        developerKey=api_key
+    )
 
     request = youtube.search().list(
         q=query,
@@ -131,40 +155,47 @@ async def search_with_api(query: str, key: str) -> List[Track]:
 
     response = await asyncio.to_thread(request.execute)
 
-    results = []
+    results: List[Track] = []
+
     for item in response.get("items", []):
-        vid = item["id"]["videoId"]
+        video_id = item["id"]["videoId"]
+
         results.append(Track(
-            id=vid,
+            id=video_id,
             title=item["snippet"]["title"],
             artist=item["snippet"]["channelTitle"],
             channel=item["snippet"]["channelTitle"],
             thumbnailUrl=item["snippet"]["thumbnails"]["default"]["url"],
-            videoUrl=f"https://www.youtube.com/watch?v={vid}",
-            duration=300,
+            videoUrl=f"https://www.youtube.com/watch?v={video_id}",
+            duration=300,  # Basitlik için sabit
             hasCopyright=False
         ))
+
     return results
 
 async def search_with_scraper(query: str) -> List[Track]:
     def _search():
-        return YoutubeSearch(query, max_results=10).to_json()
+        return VideosSearch(query, limit=10).result()
 
-    raw = await asyncio.to_thread(_search)
-    data = json.loads(raw).get("videos", [])
+    data = await asyncio.to_thread(_search)
+    videos = data.get("result", [])
 
-    results = []
-    for item in data:
+    results: List[Track] = []
+
+    for v in videos:
+        duration_str = v.get("duration", "0:00")
+
         results.append(Track(
-            id=item["id"],
-            title=item["title"],
-            artist=item.get("channel", "Unknown"),
-            channel=item.get("channel", "Unknown"),
-            thumbnailUrl=item.get("thumbnails", [""])[0],
-            videoUrl=f"https://www.youtube.com/watch?v={item['id']}",
-            duration=parse_duration(item.get("duration", "0:00")),
+            id=v["id"],
+            title=v["title"],
+            artist=v.get("channel", {}).get("name", "Unknown"),
+            channel=v.get("channel", {}).get("name", "Unknown"),
+            thumbnailUrl=v["thumbnails"][0]["url"],
+            videoUrl=v["link"],
+            duration=parse_duration(duration_str),
             hasCopyright=False
         ))
+
     return results
 
 # --------------------------------------------------
@@ -172,27 +203,39 @@ async def search_with_scraper(query: str) -> List[Track]:
 # --------------------------------------------------
 @app.get("/api/search", response_model=SearchResponse)
 async def search(q: str = Query(..., min_length=3)):
+    # 1) API KEY POOL
     for key in API_KEYS:
         try:
-            return SearchResponse(results=await search_with_api(q, key))
+            return SearchResponse(
+                results=await search_with_api(q, key)
+            )
         except Exception:
             continue
 
+    # 2) SCRAPER FALLBACK
     try:
-        return SearchResponse(results=await search_with_scraper(q))
+        return SearchResponse(
+            results=await search_with_scraper(q)
+        )
     except Exception:
-        raise HTTPException(503, "Search service unavailable")
+        raise HTTPException(
+            status_code=503,
+            detail="Search service unavailable"
+        )
 
 @app.post("/api/convert/start", response_model=ConvertResponse)
 async def start_convert(track: Track):
+    # 15 dk altı -> mobil
     if track.duration < 900:
         raise HTTPException(
-            400,
-            "Bu video mobil cihazda (FFmpegKit) işlenmelidir."
+            status_code=400,
+            detail="Bu video mobil cihazda (FFmpegKit) işlenmelidir."
         )
 
     job_id = str(uuid.uuid4())
-    asyncio.create_task(run_conversion(track.videoUrl, job_id, track.title))
+    asyncio.create_task(
+        run_conversion(track.videoUrl, job_id, track.title)
+    )
 
     return ConvertResponse(
         jobId=job_id,
