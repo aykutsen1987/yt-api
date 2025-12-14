@@ -1,100 +1,115 @@
-import os
-import uuid
-import shutil
-import tempfile
-import yt_dlp
-
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+# main.py dosyasında...
+from fastapi import FastAPI, Query, HTTPException
 from pydantic import BaseModel
+from typing import List
+import os
+import httpx
+import uuid
+import asyncio
+import subprocess # Komut satırı araçlarını (yt-dlp/ffmpeg) çalıştırmak için kritik!
 
-app = FastAPI(title="YouTube to MP3 API", version="2.2")
+# ... (Track ve SearchResponse Modelleri burada kalır) ...
 
-# CORS
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# ... (Ortam Değişkenleri burada kalır) ...
 
-class YouTubeRequest(BaseModel):
-    url: str
+app = FastAPI(...)
 
-OUTPUT_DIR = "/tmp/mp3"
-os.makedirs(OUTPUT_DIR, exist_ok=True)
+# Global olarak iş durumlarını saklamak için basit bir sözlük (Veritabanı/Redis simülasyonu)
+JOB_STATUS = {} 
 
-def convert_to_mp3(youtube_url: str):
-    temp_dir = tempfile.mkdtemp()
+# ----------------------------------------------------
+# Uzun Süreli İşlem: Video Dönüşümünü Gerçekleştiren Fonksiyon
+# Render Worker'ı olsaydı bu fonksiyon Worker'da çalışırdı.
+# Web Service üzerinde kullanmak için asenkron yapıyı kullanıyoruz.
+# ----------------------------------------------------
+async def run_conversion_task(video_url: str, job_id: str, title: str):
+    JOB_STATUS[job_id] = {"status": "PROCESSING", "progress": 0, "title": title}
+    output_path = f"/tmp/{job_id}.mp3" # Render'da /tmp dizini yazılabilir.
+
+    # --extract-audio: Yalnızca ses akışını çıkar.
+    # --audio-format mp3: Çıktı formatını mp3 olarak ayarla.
+    # -o: Çıktı dosya yolu.
+    command = [
+        "yt-dlp",
+        "--extract-audio", 
+        "--audio-format", "mp3", 
+        "--no-progress", # Konsol çıktısını sadeleştirir
+        "-o", output_path,
+        video_url
+    ]
+    
     try:
-        # Cookies yaz
-        cookies_env = os.getenv("YT_COOKIES")
-        cookies_path = os.path.join(temp_dir, "cookies.txt") if cookies_env else None
-        if cookies_env:
-            with open(cookies_path, "w", encoding="utf-8") as f:
-                f.write(cookies_env)
-
-        outtmpl = os.path.join(temp_dir, "%(id)s.%(ext)s")
-
-        ydl_opts = {
-            "format": "bestaudio/best/best",
-            "noplaylist": True,
-            "outtmpl": outtmpl,
-            "quiet": True,
-            "nocheckcertificate": True,
-            "user_agent": "Mozilla/5.0",
-            "cookies": cookies_path,
-            "postprocessors": [{
-                "key": "FFmpegExtractAudio",
-                "preferredcodec": "mp3",
-                "preferredquality": "128",
-            }],
-            "js_runtimes": {"node": {}},  # Doğru # JS solver Node.js ile
-        }
-
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(youtube_url, download=True)
-
-        mp3_file = next((os.path.join(temp_dir, f) for f in os.listdir(temp_dir) if f.endswith(".mp3")), None)
-        if not mp3_file:
-            raise Exception("MP3 dosyası üretilemedi")
-
-        final_name = f"{uuid.uuid4()}.mp3"
-        final_path = os.path.join(OUTPUT_DIR, final_name)
-        shutil.move(mp3_file, final_path)
-
-        return {
-            "title": info.get("title", "Unknown"),
-            "duration": info.get("duration", 0),
-            "filename": final_name,
-        }
-
-    finally:
-        shutil.rmtree(temp_dir, ignore_errors=True)
-
-@app.post("/api/mp3")
-async def create_mp3(req: YouTubeRequest):
-    try:
-        data = convert_to_mp3(req.url)
-        base_url = os.getenv("RENDER_EXTERNAL_URL", "").rstrip("/")
-
-        return {
-            "status": "success",
-            "mp3Url": f"{base_url}/files/{data['filename']}",
-            "title": data["title"],
-            "duration": data["duration"],
-        }
+        # subprocess.run yerine, FastAPI'nin event döngüsünü engellememek için
+        # asyncio.to_thread veya loop.run_in_executor kullanmak en iyisidir.
+        # Bu, Render'ın timeout riskini azaltır ancak tamamen ortadan kaldırmaz.
+        # BASİT ÇÖZÜM: subprocess.run (Hala riskli, ama en az çabayla yt-dlp kullanma yolu)
+        
+        # subprocess.run senkron bir fonksiyondur, bu yüzden thread'de çalıştırmalıyız.
+        # (Bu, tek bir Render Web Service'de uzun süreli dönüşümün en iyi yolu değildir, 
+        # ancak Celery/Redis entegrasyonundan kaçınmanın en basitidir.)
+        def sync_conversion():
+            process = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                check=True # Hata varsa istisna fırlatır
+            )
+            return process
+        
+        await asyncio.to_thread(sync_conversion)
+        
+        # Başarılı (Başarıdan sonra S3'e yükleme kodu buraya gelir)
+        # S3 yüklemesi için 'boto3' kütüphanesi ve 'AWS_ACCESS_KEY' değişkenleri gerekir.
+        
+        # Şimdilik başarılı varsayıyoruz.
+        download_url = f"https://YOUR_S3_BUCKET_URL/{job_id}.mp3" 
+        JOB_STATUS[job_id] = {"status": "COMPLETED", "progress": 100, "downloadUrl": download_url}
+        
+    except subprocess.CalledProcessError as e:
+        JOB_STATUS[job_id] = {"status": "FAILED", "error": f"Dönüşüm hatası: {e.stderr}"}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        JOB_STATUS[job_id] = {"status": "FAILED", "error": f"Beklenmedik hata: {str(e)}"}
+    finally:
+        # Dönüşüm bitince geçici dosyayı temizle (Render'ın geçici diski dolar)
+        if os.path.exists(output_path):
+            os.remove(output_path)
 
-@app.get("/files/{filename}")
-async def serve_file(filename: str):
-    path = os.path.join(OUTPUT_DIR, filename)
-    if not os.path.exists(path):
-        raise HTTPException(status_code=404, detail="Dosya bulunamadı")
-    return FileResponse(path, media_type="audio/mpeg")
 
-@app.get("/health")
-def health():
-    return {"status": "ok"}
+# ----------------------------------------------------
+# Endpoint: Uzun Dönüşümü Başlatma
+# ----------------------------------------------------
+@app.post("/api/convert/start", tags=["Conversion"])
+async def start_conversion(track: Track):
+    """
+    Uzun süreli video dönüşümünü bir arka plan thread'inde başlatır ve hemen yanıt döner.
+    """
+    # 15 dakikanın altındaki videolar (900 saniye) uygulamanın kendisi tarafından işlenmelidir.
+    if track.duration <= 900:
+         raise HTTPException(status_code=400, detail="Bu video cihazda (FFmpegKit) işlenecek kadar kısadır.")
+         
+    job_id = str(uuid.uuid4())
+    
+    # Arka plan işini başlatıyoruz. HTTP isteğini engellemez.
+    # Bu, Render Web Service'inize 300 saniye timeout kısıtlamasına rağmen 
+    # uzun süreli işleri başlatma yeteneği verir.
+    asyncio.create_task(run_conversion_task(track.videoUrl, job_id, track.title))
+    
+    return {
+        "jobId": job_id,
+        "status": "PROCESSING_STARTED",
+        "message": "Dönüşüm arka planda başladı. Lütfen durumu kontrol edin."
+    }
+
+# ----------------------------------------------------
+# Endpoint: Durum Kontrolü
+# ----------------------------------------------------
+@app.get("/api/convert/status", tags=["Conversion"])
+def get_conversion_status(jobId: str):
+    """ Dönüşüm işinin durumunu (Bekliyor, İşleniyor, Tamamlandı, Hata) döndürür. """
+    status = JOB_STATUS.get(jobId)
+    if not status:
+        raise HTTPException(status_code=404, detail="Job ID bulunamadı.")
+    
+    return status
+
+# ... (Diğer endpointler: /api/search, /api/copyright-check) ...
