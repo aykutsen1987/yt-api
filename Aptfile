@@ -2,3 +2,4 @@
 ffmpeg
 # yt-dlp için ek JavaScript runtime (gerekli olabilir)
 nodejs
+build-essential
