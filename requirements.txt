@@ -1,5 +1,8 @@
 fastapi
 uvicorn
-# Asenkron HTTP istekleri için
-httpx 
-# Diğer kütüphaneleriniz...
+httpx
+python-dotenv
+# Video indirme ve işleme kütüphanesi
+yt-dlp 
+# AWS S3'e dosya yüklemek için
+# boto3
