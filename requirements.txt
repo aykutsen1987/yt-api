@@ -1,6 +1,5 @@
 fastapi
 uvicorn
-yt-dlp
-pydantic
-aiofiles
-python-multipart
+# Asenkron HTTP istekleri için
+httpx 
+# Diğer kütüphaneleriniz...
