@@ -2,9 +2,6 @@ fastapi
 uvicorn
 httpx
 python-dotenv
-# Yedek arama için
-youtube-search-python 
-# YouTube Data API (Birincil arama) için
-google-api-python-client 
-# Video işleme için
+google-api-python-client
+youtube-search-python   
 yt-dlp
