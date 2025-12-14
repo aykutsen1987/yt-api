@@ -2,7 +2,8 @@ fastapi
 uvicorn
 httpx
 python-dotenv
-# Video indirme ve işleme kütüphanesi
+# YouTube Data API yerine arama için kullanılan kütüphane
+youtube-search-python 
+# Video indirme ve işleme için (bu komut satırı aracıdır, ama bu kütüphane Python'da bunu yönetmeye yarar)
 yt-dlp 
-# AWS S3'e dosya yüklemek için
-# boto3
+# Diğer kütüphaneleriniz...
