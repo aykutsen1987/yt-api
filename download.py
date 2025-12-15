@@ -1,7 +1,7 @@
 import yt_dlp
 import tempfile
-from youtube.stream import get_stream_url
-from youtube.search import search_music
+from copyright import is_copyright_free
+
 
 async def get_download_url(video_id: str):
     # tekrar telif kontrolü (fail-safe)
