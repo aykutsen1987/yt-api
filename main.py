@@ -1,27 +1,22 @@
-from fastapi import FastAPI, HTTPException, Query
-from youtube.search import search_music
-from youtube.stream import get_stream_url
-from youtube.download import get_download_url
+from fastapi import FastAPI
+from search import search_music
+from stream import stream_audio
+from download import download_audio
 
-app = FastAPI(
-    title="Mp3DMeta Backend",
-    version="1.0.0"
-)
+app = FastAPI()
+
+@app.get("/")
+def root():
+    return {"status": "Mp3DMeta backend running"}
 
 @app.get("/search")
-async def search(q: str = Query(..., min_length=2)):
-    return await search_music(q)
+def search(q: str):
+    return search_music(q)
 
 @app.get("/stream/{video_id}")
-async def stream(video_id: str):
-    url = await get_stream_url(video_id)
-    if not url:
-        raise HTTPException(status_code=404, detail="Stream not available")
-    return {"streamUrl": url}
+def stream(video_id: str):
+    return stream_audio(video_id)
 
 @app.get("/download/{video_id}")
-async def download(video_id: str):
-    data = await get_download_url(video_id)
-    if not data:
-        raise HTTPException(status_code=403, detail="Download not allowed")
-    return data
+def download(video_id: str):
+    return download_audio(video_id)
