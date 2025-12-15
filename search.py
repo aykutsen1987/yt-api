@@ -1,6 +1,7 @@
 import httpx
-from youtube.api_keys import get_api_key
-from youtube.copyright import is_download_allowed
+from api_keys import get_api_key
+from copyright import is_copyright_free
+
 
 async def search_music(query: str):
     api_key = get_api_key()
