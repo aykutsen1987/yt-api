@@ -6,9 +6,6 @@ KEYWORDS = [
     "public domain"
 ]
 
-def is_download_allowed(title: str, description: str, channel: str):
+def is_download_allowed(title: str, description: str, channel: str) -> bool:
     text = f"{title} {description} {channel}".lower()
-    for k in KEYWORDS:
-        if k in text:
-            return True
-    return False
+    return any(k in text for k in KEYWORDS)
