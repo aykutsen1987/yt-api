@@ -1,6 +1,9 @@
 import yt_dlp
 import tempfile
 
+from api_keys import get_api_key
+
+
 async def get_stream_url(video_id: str):
     ydl_opts = {
         "format": "bestaudio",
